@@ -1,0 +1,2 @@
+# '@' is not a valid token in Kal.
+1 + @ 2;

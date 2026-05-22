@@ -1,5 +1,7 @@
 # Kal — a tiny expression language built on LLVM
 
+[![CI](https://github.com/nktkt/kal/actions/workflows/ci.yml/badge.svg)](https://github.com/nktkt/kal/actions/workflows/ci.yml)
+
 > 🇯🇵 日本語版は [README.ja.md](README.ja.md)
 
 Kal is a minimal "calculator / expression" language (in the spirit of LLVM's
@@ -10,9 +12,11 @@ on the fly with an **ORC JIT**.
 source → [Lexer] → tokens → [Parser] → AST → [CodeGen] → LLVM IR → [ORC JIT] → run
 ```
 
-The whole implementation lives in a single, heavily-commented file:
-[`src/kal.cpp`](src/kal.cpp) (~700 lines), so it doubles as a readable
-introduction to building a language frontend on LLVM.
+The compiler is split into small, focused units under `src/` and `include/kal/`
+(source manager, span-aware diagnostics, lexer, parser, a codegen-free AST, and
+codegen), so it doubles as a readable introduction to building a real language
+frontend on LLVM. This layered structure is the foundation for the long-term
+plan in [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -99,22 +103,45 @@ for i = 1, i < 6, 1 in printd(i*i);   # 1 4 9 16 25
 
 ```
 kal/
-├── CMakeLists.txt      # links against LLVM via find_package(LLVM)
-├── src/kal.cpp         # Lexer / Parser / CodeGen / JIT driver
-└── examples/
-    ├── arith.kal       # arithmetic & precedence
-    ├── fib.kal         # recursion (Fibonacci)
-    ├── loop.kal        # for loops and putchard
-    └── extern.kal      # calling libm's sin/cos/sqrt
+├── CMakeLists.txt           # links against LLVM via find_package(LLVM)
+├── include/kal/             # public headers
+│   ├── SourceManager.h      #   source files, byte spans, line/column
+│   ├── Diagnostic.h         #   span-aware, rustc-style error reporting
+│   ├── Token.h  Lexer.h     #   tokens + lexer
+│   ├── AST.h    Parser.h    #   codegen-free AST + parser
+│   └── CodeGen.h            #   AST → LLVM IR
+├── src/                     # implementations + main.cpp (JIT driver)
+├── examples/                # arith, fib, loop, extern
+├── tests/                   # golden-test harness (run_tests.sh) + cases
+└── .github/workflows/ci.yml # build + test on Linux & macOS
 ```
 
-`src/kal.cpp` is organized into sections matching its comment headers:
-1. **Lexer** — characters → tokens
-2. **AST** — syntax-tree node definitions
-3. **Parser** — recursive descent + operator-precedence parsing
-4. **CodeGen** — each node's `codegen()` emits LLVM IR
-5. **Runtime** — `printd` / `putchard` (host-side `extern "C"`)
-6. **Driver** — parse → declare all prototypes → emit bodies → emit `__main` → JIT
+The pipeline is layered: `Lexer → Parser (AST) → CodeGen (LLVM IR) → ORC JIT`.
+The AST carries no codegen logic — `CodeGen` walks it separately — which keeps
+each stage independent and ready to grow (typed HIR, MIR, a borrow checker; see
+[ROADMAP.md](ROADMAP.md)).
+
+Diagnostics point at the exact source span, e.g.:
+
+```
+error[E0100]: 未定義の変数です
+ --> prog.kal:2:9
+  |
+2 | def f() x;
+  |         ^
+```
+
+## Tests
+
+```sh
+cmake --build build -j        # build kalc first
+bash tests/run_tests.sh       # run the golden suite
+bash tests/run_tests.sh --bless   # regenerate expected outputs after intended changes
+```
+
+Example programs are checked against `tests/expected/*.out`; deliberately
+invalid programs in `tests/diagnostics/` are checked against their expected
+`*.stderr`. CI runs this suite on Linux and macOS for every push and PR.
 
 ---
 

@@ -1,13 +1,17 @@
-# Kal — LLVM で作る自作の式言語 v0.1
+# Kal — LLVM で作る自作の式言語
 
-Kal は LLVM をバックエンドにした「電卓・式言語」(Kaleidoscope 系) の最小実装です。
+[![CI](https://github.com/nktkt/kal/actions/workflows/ci.yml/badge.svg)](https://github.com/nktkt/kal/actions/workflows/ci.yml)
+
+Kal は LLVM をバックエンドにした「電卓・式言語」(Kaleidoscope 系) の実装です。
 ソースを **LLVM IR** にコンパイルし、**ORC JIT** でその場実行します。
 
 ```
 ソース → [Lexer] → トークン → [Parser] → AST → [CodeGen] → LLVM IR → [ORC JIT] → 実行
 ```
 
-実装はすべて `src/kal.cpp` の 1 ファイル（約 700 行、教材として読めるようコメント多め）。
+コンパイラは `src/` と `include/kal/` に小さな単位で分割されています（ソース管理・
+span 付き診断・字句解析・構文解析・codegen を持たない AST・コード生成）。各段が独立
+しており、長期計画（[ROADMAP.md](ROADMAP.md)）の土台になっています。
 
 ---
 
@@ -93,22 +97,43 @@ for i = 1, i < 6, 1 in printd(i*i);   # 1 4 9 16 25
 
 ```
 kal/
-├── CMakeLists.txt      # find_package(LLVM) でリンク設定
-├── src/kal.cpp         # Lexer / Parser / CodeGen / JIT ドライバ
-└── examples/
-    ├── arith.kal       # 四則演算と優先順位
-    ├── fib.kal         # 再帰（フィボナッチ）
-    ├── loop.kal        # for ループと putchard
-    └── extern.kal      # libm の sin/cos/sqrt 呼び出し
+├── CMakeLists.txt           # find_package(LLVM) でリンク設定
+├── include/kal/             # 公開ヘッダ
+│   ├── SourceManager.h      #   ソース・span・行/列
+│   ├── Diagnostic.h         #   span 付き rustc 風診断
+│   ├── Token.h  Lexer.h     #   トークン + 字句解析
+│   ├── AST.h    Parser.h    #   codegen を持たない AST + 構文解析
+│   └── CodeGen.h            #   AST → LLVM IR
+├── src/                     # 実装 + main.cpp（JIT ドライバ）
+├── examples/                # arith, fib, loop, extern
+├── tests/                   # ゴールデンテスト（run_tests.sh）
+└── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```
 
-`src/kal.cpp` の構成（コメントの章番号と対応）:
-1. **Lexer** — 文字列をトークンへ
-2. **AST** — 構文木ノード定義
-3. **Parser** — 再帰下降 + 演算子優先順位
-4. **CodeGen** — 各 AST ノードの `codegen()` が LLVM IR を生成
-5. **ランタイム** — `printd` / `putchard`（C++ 側の `extern "C"`）
-6. **ドライバ** — パース → 全プロトタイプ宣言 → 本体生成 → `__main` 生成 → JIT 実行
+パイプラインは段階的: `Lexer → Parser(AST) → CodeGen(LLVM IR) → ORC JIT`。
+AST は codegen ロジックを持たず、`CodeGen` が別に走査するため、各段が独立して
+拡張できます（型付き HIR・MIR・借用チェッカへ。[ROADMAP.md](ROADMAP.md) 参照）。
+
+診断はソースの該当箇所を正確に指します:
+
+```
+error[E0100]: 未定義の変数です
+ --> prog.kal:2:9
+  |
+2 | def f() x;
+  |         ^
+```
+
+## テスト
+
+```sh
+cmake --build build -j            # 先に kalc をビルド
+bash tests/run_tests.sh           # ゴールデンテスト実行
+bash tests/run_tests.sh --bless   # 意図した変更後に期待出力を再生成
+```
+
+例題は `tests/expected/*.out`、わざと不正な `tests/diagnostics/` のプログラムは
+期待 `*.stderr` と比較されます。CI が push / PR ごとに Linux・macOS で実行します。
 
 ---
 

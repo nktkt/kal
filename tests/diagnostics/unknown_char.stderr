@@ -1,0 +1,6 @@
+error[E0001]: 不明な文字 '@' です
+ --> tests/diagnostics/unknown_char.kal:2:5
+  |
+2 | 1 + @ 2;
+  |     ^
+1 個のエラーで中断しました

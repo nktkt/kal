@@ -1,0 +1,80 @@
+name: CI
+
+# Build Kal with LLVM 22 and run the golden-test harness on Linux and macOS.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pin to ubuntu-24.04 (== ubuntu-latest as of 2026) so the
+          # apt.llvm.org repository codename (noble) is deterministic.
+          - os: ubuntu-24.04
+            name: linux (llvm 22)
+          - os: macos-latest
+            name: macos (llvm 22)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- LLVM 22 on Ubuntu --------------------------------------------------
+      # Use the official apt.llvm.org installer script, the canonical way to get
+      # a specific LLVM major version on Debian/Ubuntu. We pin it to 22. The
+      # repo metadata can occasionally lag behind the published binaries
+      # (llvm/llvm-project issues #182462, #183715), so we retry `apt-get update`
+      # a few times to ride out transient sync hiccups. The script installs into
+      # /usr/lib/llvm-22, so LLVM_DIR is /usr/lib/llvm-22/lib/cmake/llvm.
+      - name: Install LLVM 22 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          sudo apt-get update || true
+          sudo apt-get install -y --no-install-recommends wget gnupg lsb-release software-properties-common cmake ninja-build
+          wget -O /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 22
+          # Dev package provides the CMake config + headers + static libs.
+          for attempt in 1 2 3; do
+            sudo apt-get update && break || sleep 15
+          done
+          sudo apt-get install -y llvm-22-dev libllvm22 llvm-22-tools
+          echo "LLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      # --- LLVM 22 on macOS ---------------------------------------------------
+      # Homebrew ships LLVM 22 as the keg-only formula `llvm@22`. It is not put
+      # on PATH automatically, so we point LLVM_DIR at its CMake config and add
+      # its bin to PATH so `llvm-config` is discoverable.
+      - name: Install LLVM 22 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          brew update
+          brew install llvm@22 cmake ninja
+          LLVM_PREFIX="$(brew --prefix llvm@22)"
+          echo "LLVM_DIR=${LLVM_PREFIX}/lib/cmake/llvm" >> "$GITHUB_ENV"
+          echo "${LLVM_PREFIX}/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain versions
+        run: |
+          cmake --version
+          llvm-config --version
+          echo "LLVM_DIR=$LLVM_DIR"
+
+      # --- Build --------------------------------------------------------------
+      - name: Configure
+        run: cmake -S . -B build -DLLVM_DIR="$LLVM_DIR" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      # --- Test ---------------------------------------------------------------
+      - name: Run golden tests
+        run: bash tests/run_tests.sh

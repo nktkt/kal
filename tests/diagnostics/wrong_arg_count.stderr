@@ -1,0 +1,6 @@
+error[E0103]: 引数の数が一致しません
+ --> tests/diagnostics/wrong_arg_count.kal:3:1
+  |
+3 | add(1);
+  | ^^^^^^
+1 個のエラーで中断しました

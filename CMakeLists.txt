@@ -6,9 +6,12 @@ find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 
-add_executable(kalc src/kal.cpp)
+file(GLOB KAL_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+add_executable(kalc ${KAL_SOURCES})
 
-target_include_directories(kalc PRIVATE ${LLVM_INCLUDE_DIRS})
+target_include_directories(kalc PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")
 target_compile_definitions(kalc PRIVATE ${LLVM_DEFINITIONS_LIST})
 

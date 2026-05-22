@@ -1,0 +1,6 @@
+error[E0010]: ')' が必要です
+ --> tests/diagnostics/missing_paren.kal:2:7
+  |
+2 | (1 + 2;
+  |       ^
+1 個のエラーで中断しました
