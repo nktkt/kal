@@ -1,0 +1,8 @@
+# extern で標準ライブラリの関数を宣言して呼べる
+extern sin(x);
+extern cos(x);
+extern sqrt(x);
+
+sin(0);      # => 0
+cos(0);      # => 1
+sqrt(2);     # => 1.41421
