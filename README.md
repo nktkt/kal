@@ -272,7 +272,8 @@ ahead-of-time compiled systems language with ownership-based memory management
 
 The full long-term plan — compiler re-architecture, type system, borrow checker,
 generics, standard library, tooling (LSP / package manager), and the path to
-v1.0 — lives in **[ROADMAP.md](ROADMAP.md)**.
+v1.0 — lives in **[ROADMAP.md](ROADMAP.md)**; see **[CHANGELOG.md](CHANGELOG.md)**
+for what each release ships.
 
 Good first steps if you want to hack on it now: route parse errors through a real
 diagnostics module, add source spans, and split `src/kal.cpp` into
