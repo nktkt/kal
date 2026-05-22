@@ -1,0 +1,6 @@
+error[E0110]: 戻り値の型が一致しません (期待 i64, 実際 f64)
+ --> tests/diagnostics/return_type_mismatch.kal:2:17
+  |
+2 | fn f() -> i64 = 1.0;
+  |                 ^^^
+1 個のエラーで中断しました

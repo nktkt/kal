@@ -37,9 +37,23 @@ void Parser::recover() {
 }
 
 ExprPtr Parser::parseNumberExpr() {
-  auto e = std::make_unique<NumberExpr>(cur_.span, cur_.value);
+  auto e = std::make_unique<NumberExpr>(cur_.span, cur_.isFloat, cur_.floatValue,
+                                        cur_.intValue);
   advance();
   return e;
+}
+
+bool Parser::parseType(Type &out) {
+  if (cur_.kind != Tok::Identifier) {
+    diag_.error(cur_.span, "E0030", "型名が必要です");
+    return false;
+  }
+  if (!typeFromName(cur_.text, out)) {
+    diag_.error(cur_.span, "E0031", "未知の型名です");
+    return false;
+  }
+  advance();
+  return true;
 }
 
 ExprPtr Parser::parseParenExpr() {
@@ -176,6 +190,23 @@ ExprPtr Parser::parsePrimary() {
   }
 }
 
+ExprPtr Parser::parseUnary() {
+  auto e = parsePrimary();
+  if (!e)
+    return nullptr;
+  // 後置キャスト: `expr as Type` (二項演算子より強く結合)
+  while (cur_.kind == Tok::As) {
+    advance();
+    Span typeSpan = cur_.span;
+    Type t;
+    if (!parseType(t))
+      return nullptr;
+    Span full{e->span.fileId, e->span.start, typeSpan.end};
+    e = std::make_unique<CastExpr>(full, std::move(e), t);
+  }
+  return e;
+}
+
 ExprPtr Parser::parseBinOpRHS(int exprPrec, ExprPtr lhs) {
   for (;;) {
     int prec = binPrecedence(cur_.kind);
@@ -186,7 +217,7 @@ ExprPtr Parser::parseBinOpRHS(int exprPrec, ExprPtr lhs) {
     Span opSpan = cur_.span;
     advance();
 
-    auto rhs = parsePrimary();
+    auto rhs = parseUnary();
     if (!rhs)
       return nullptr;
 
@@ -204,7 +235,7 @@ ExprPtr Parser::parseBinOpRHS(int exprPrec, ExprPtr lhs) {
 }
 
 ExprPtr Parser::parseExpression() {
-  auto lhs = parsePrimary();
+  auto lhs = parseUnary();
   if (!lhs)
     return nullptr;
   return parseBinOpRHS(0, std::move(lhs));
@@ -225,31 +256,67 @@ std::unique_ptr<Prototype> Parser::parsePrototype() {
   }
   advance();
 
+  // 引数:  name: Type, name: Type, ...
   std::vector<std::string> args;
-  while (cur_.kind == Tok::Identifier) {
-    args.push_back(cur_.text);
-    advance();
-  }
+  std::vector<Type> paramTypes;
   if (cur_.kind != Tok::RParen) {
-    diag_.error(cur_.span, "E0022", "プロトタイプには ')' が必要です");
-    return nullptr;
+    for (;;) {
+      if (cur_.kind != Tok::Identifier) {
+        diag_.error(cur_.span, "E0023", "引数名が必要です");
+        return nullptr;
+      }
+      std::string pname = cur_.text;
+      advance();
+      if (cur_.kind != Tok::Colon) {
+        diag_.error(cur_.span, "E0024", "引数には ': 型' の注釈が必要です");
+        return nullptr;
+      }
+      advance();
+      Type pt;
+      if (!parseType(pt))
+        return nullptr;
+      args.push_back(std::move(pname));
+      paramTypes.push_back(pt);
+      if (cur_.kind == Tok::RParen)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0025", "引数リストには ',' か ')' が必要です");
+        return nullptr;
+      }
+      advance();
+    }
   }
   Span end = cur_.span;
-  advance();
+  advance(); // ')'
+
+  // 戻り値型:  -> Type  (省略時は unit)
+  Type retType = Type::unit();
+  if (cur_.kind == Tok::Arrow) {
+    advance();
+    if (!parseType(retType))
+      return nullptr;
+  }
 
   auto p = std::make_unique<Prototype>();
   p->name = std::move(name);
   p->nameSpan = nameSpan;
   p->args = std::move(args);
+  p->paramTypes = std::move(paramTypes);
+  p->retType = retType;
   p->span = {nameSpan.fileId, nameSpan.start, end.end};
   return p;
 }
 
 std::unique_ptr<FunctionDef> Parser::parseDefinition() {
-  advance(); // 'def'
+  advance(); // 'fn'
   auto proto = parsePrototype();
   if (!proto)
     return nullptr;
+  if (cur_.kind != Tok::Equal) {
+    diag_.error(cur_.span, "E0026", "関数本体の前に '=' が必要です");
+    return nullptr;
+  }
+  advance();
   auto body = parseExpression();
   if (!body)
     return nullptr;
@@ -273,7 +340,7 @@ Program Parser::parseProgram() {
       advance();
       continue;
     }
-    if (cur_.kind == Tok::Def) {
+    if (cur_.kind == Tok::Fn) {
       if (auto f = parseDefinition())
         prog.functions.push_back(std::move(f));
       else

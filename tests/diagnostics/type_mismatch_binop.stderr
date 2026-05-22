@@ -1,0 +1,6 @@
+error[E0121]: 二項演算の両辺の型が一致しません (i32 と f64)
+ --> tests/diagnostics/type_mismatch_binop.kal:3:1
+  |
+3 | 1 + 2.0;
+  | ^^^^^^^
+1 個のエラーで中断しました

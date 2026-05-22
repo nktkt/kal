@@ -2,6 +2,8 @@
 #pragma once
 
 #include "kal/Token.h"
+#include "kal/Type.h"
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -9,18 +11,33 @@
 namespace kal {
 
 /// 式ノードの基底。codegen は持たない (CodeGen が kind で分岐する)。
+/// `type` は Sema (型検査) が後から埋める。
 struct Expr {
-  enum class Kind { Number, Variable, Binary, Call, If, For };
+  enum class Kind { Number, Variable, Binary, Call, If, For, Cast };
   Kind kind;
   Span span;
+  Type type; // Sema が設定する計算結果の型
   Expr(Kind k, Span s) : kind(k), span(s) {}
   virtual ~Expr() = default;
 };
 using ExprPtr = std::unique_ptr<Expr>;
 
+/// 数値リテラル。整数か小数かを保持し、型は Sema が文脈から決める。
 struct NumberExpr : Expr {
-  double value;
-  NumberExpr(Span s, double v) : Expr(Kind::Number, s), value(v) {}
+  bool isFloat;
+  double floatValue;
+  uint64_t intValue;
+  NumberExpr(Span s, bool isFloat, double fv, uint64_t iv)
+      : Expr(Kind::Number, s), isFloat(isFloat), floatValue(fv), intValue(iv) {}
+};
+
+/// 型キャスト: `operand as targetType`
+struct CastExpr : Expr {
+  ExprPtr operand;
+  Type targetType;
+  CastExpr(Span s, ExprPtr operand, Type targetType)
+      : Expr(Kind::Cast, s), operand(std::move(operand)),
+        targetType(targetType) {}
 };
 
 struct VariableExpr : Expr {
@@ -64,11 +81,13 @@ struct ForExpr : Expr {
         cond(std::move(cond)), step(std::move(step)), body(std::move(body)) {}
 };
 
-/// 関数プロトタイプ (引数はすべて double)。
+/// 関数プロトタイプ (引数名 + 引数型 + 戻り値型)。
 struct Prototype {
   std::string name;
   Span nameSpan;
   std::vector<std::string> args;
+  std::vector<Type> paramTypes;
+  Type retType;
   Span span;
 };
 

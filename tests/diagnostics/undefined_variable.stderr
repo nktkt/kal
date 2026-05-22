@@ -1,6 +1,6 @@
 error[E0100]: 未定義の変数です
- --> tests/diagnostics/undefined_variable.kal:2:9
+ --> tests/diagnostics/undefined_variable.kal:2:17
   |
-2 | def f() x;
-  |         ^
+2 | fn f() -> i32 = x;
+  |                 ^
 1 個のエラーで中断しました

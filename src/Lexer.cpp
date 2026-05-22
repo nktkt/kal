@@ -48,8 +48,8 @@ Token Lexer::next() {
       ++pos_;
     llvm::StringRef s = buf_.substr(start, pos_ - start);
     Tok k = Tok::Identifier;
-    if (s == "def")
-      k = Tok::Def;
+    if (s == "fn")
+      k = Tok::Fn;
     else if (s == "extern")
       k = Tok::Extern;
     else if (s == "if")
@@ -62,18 +62,40 @@ Token Lexer::next() {
       k = Tok::For;
     else if (s == "in")
       k = Tok::In;
+    else if (s == "as")
+      k = Tok::As;
     t.text = s.str();
     return make(k);
   }
 
-  // 数値
+  // 数値リテラル (整数 or 小数)
   if (std::isdigit(static_cast<unsigned char>(c)) || c == '.') {
+    bool isFloat = false;
     while (pos_ < buf_.size() &&
-           (std::isdigit(static_cast<unsigned char>(buf_[pos_])) ||
-            buf_[pos_] == '.'))
+           std::isdigit(static_cast<unsigned char>(buf_[pos_])))
       ++pos_;
+    if (pos_ < buf_.size() && buf_[pos_] == '.') {
+      isFloat = true;
+      ++pos_;
+      while (pos_ < buf_.size() &&
+             std::isdigit(static_cast<unsigned char>(buf_[pos_])))
+        ++pos_;
+    }
+    if (pos_ < buf_.size() && (buf_[pos_] == 'e' || buf_[pos_] == 'E')) {
+      isFloat = true;
+      ++pos_;
+      if (pos_ < buf_.size() && (buf_[pos_] == '+' || buf_[pos_] == '-'))
+        ++pos_;
+      while (pos_ < buf_.size() &&
+             std::isdigit(static_cast<unsigned char>(buf_[pos_])))
+        ++pos_;
+    }
     llvm::StringRef s = buf_.substr(start, pos_ - start);
-    t.value = std::strtod(s.str().c_str(), nullptr);
+    t.isFloat = isFloat;
+    if (isFloat)
+      t.floatValue = std::strtod(s.str().c_str(), nullptr);
+    else
+      t.intValue = std::strtoull(s.str().c_str(), nullptr, 10);
     return make(Tok::Number);
   }
 
@@ -83,6 +105,10 @@ Token Lexer::next() {
   case '+':
     return make(Tok::Plus);
   case '-':
+    if (pos_ < buf_.size() && buf_[pos_] == '>') {
+      ++pos_;
+      return make(Tok::Arrow); // ->
+    }
     return make(Tok::Minus);
   case '*':
     return make(Tok::Star);
@@ -94,6 +120,8 @@ Token Lexer::next() {
     return make(Tok::Greater);
   case '=':
     return make(Tok::Equal);
+  case ':':
+    return make(Tok::Colon);
   case '(':
     return make(Tok::LParen);
   case ')':

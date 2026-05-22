@@ -1,15 +1,14 @@
-# for ループと組み込み関数
+# for ループと組み込み出力 (戻り値型を省略すると unit)
 
-# putchard は文字コードを 1 文字出力する (65 = 'A')
-# for i = 開始, 継続条件, ステップ in 本体
-def printstars(n)
+fn printstars(n: i32) =
   for i = 1, i < n, 1 in
-    putchard(42);   # 42 = '*'
+    putchard(42);          # 42 = '*'
 
-# '*' を 10 個並べて改行 (10 = '\n')
-printstars(11);
-putchard(10);
+printstars(11);            # => '*' を 10 個
+putchard(10);              # 改行 (10 = '\n')
 
-# 1 から 5 までの 2 乗を表示
-def square(x) x * x;
-for i = 1, i < 6, 1 in printd(square(i));
+# 1〜5 の 2 乗を表示 (i32 を i64 にキャストして printi へ)
+fn square(x: i32) -> i32 = x * x;
+
+for i = 1, i < 6, 1 in
+  printi(square(i) as i64);

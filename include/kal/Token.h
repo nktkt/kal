@@ -9,13 +9,14 @@ namespace kal {
 enum class Tok {
   Eof,
   // キーワード
-  Def,
+  Fn,
   Extern,
   If,
   Then,
   Else,
   For,
   In,
+  As,
   // 主要トークン
   Identifier,
   Number,
@@ -27,6 +28,8 @@ enum class Tok {
   Less,
   Greater,
   Equal,
+  Arrow, // ->
+  Colon, // :
   LParen,
   RParen,
   Comma,
@@ -37,8 +40,10 @@ enum class Tok {
 struct Token {
   Tok kind = Tok::Eof;
   Span span;
-  std::string text; // Identifier のとき有効
-  double value = 0; // Number のとき有効
+  std::string text;        // Identifier のとき有効
+  bool isFloat = false;    // Number が小数リテラルか
+  double floatValue = 0;   // Number(小数) のとき有効
+  uint64_t intValue = 0;   // Number(整数) のとき有効
 };
 
 /// 二項演算子の優先順位。二項演算子でなければ -1。

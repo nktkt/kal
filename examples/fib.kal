@@ -1,10 +1,9 @@
-# 再帰: フィボナッチ数 (if/then/else を使う)
+# 再帰: フィボナッチ数 (i64)
+# `2` や `1` は n: i64 に合わせて i64 に推論される (双方向型推論)
 
-def fib(n)
-  if n < 2 then
-    n
-  else
-    fib(n - 1) + fib(n - 2);
+fn fib(n: i64) -> i64 =
+  if n < 2 then n
+  else fib(n - 1) + fib(n - 2);
 
 fib(10);   # => 55
 fib(15);   # => 610

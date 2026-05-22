@@ -21,7 +21,7 @@ public:
   std::unique_ptr<llvm::Module> run(const Program &program);
 
 private:
-  llvm::Type *doubleTy();
+  llvm::Type *toLLVM(const Type &t); // kal::Type → llvm::Type (unit は void)
 
   llvm::Value *genExpr(const Expr *e);
   llvm::Value *genNumber(const NumberExpr *e);
@@ -30,6 +30,7 @@ private:
   llvm::Value *genCall(const CallExpr *e);
   llvm::Value *genIf(const IfExpr *e);
   llvm::Value *genFor(const ForExpr *e);
+  llvm::Value *genCast(const CastExpr *e);
 
   llvm::Function *declareProto(const Prototype &p);
   bool genFunction(const FunctionDef &f);

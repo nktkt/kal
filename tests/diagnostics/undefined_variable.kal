@@ -1,3 +1,2 @@
 # A function body references a variable that was never defined.
-def f() x;
-f();
+fn f() -> i32 = x;

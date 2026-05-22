@@ -6,12 +6,15 @@ Kal は LLVM をバックエンドにした「電卓・式言語」(Kaleidoscope
 ソースを **LLVM IR** にコンパイルし、**ORC JIT** でその場実行します。
 
 ```
-ソース → [Lexer] → トークン → [Parser] → AST → [CodeGen] → LLVM IR → [ORC JIT] → 実行
+ソース → [Lexer] → トークン → [Parser] → AST → [Sema] → 型付きAST → [CodeGen] → LLVM IR → [ORC JIT] → 実行
 ```
 
+**静的型付き**（`i8`〜`i64`・`u8`〜`u64`・`f32`・`f64`・`bool`）で、型検査器が
+リテラルの型を文脈から推論し、正確なエラーを出します。暗黙の数値変換はありません（`as` を使用）。
+
 コンパイラは `src/` と `include/kal/` に小さな単位で分割されています（ソース管理・
-span 付き診断・字句解析・構文解析・codegen を持たない AST・コード生成）。各段が独立
-しており、長期計画（[ROADMAP.md](ROADMAP.md)）の土台になっています。
+span 付き診断・字句解析・構文解析・codegen を持たない AST・型検査・コード生成）。各段が
+独立しており、長期計画（[ROADMAP.md](ROADMAP.md)）の土台になっています。
 
 ---
 
@@ -39,54 +42,65 @@ echo '1 + 2 * 3;' | ./build/kalc  # ワンライナー → 7
 ./build/kalc --emit-ir examples/fib.kal   # 実行せず LLVM IR を表示
 ```
 
-トップレベルに書いた式は値が**自動表示**されます（REPL/電卓の挙動）。
-すべてが式＝値を返すので、ループや `putchard` など `0` を返す式は `0` も表示されます。
+トップレベルに書いた式は型に応じて**自動表示**されます（整数・浮動小数点・bool）。
+`()`（unit）型の式――ループや出力組み込み――は何も表示しません。
 
 ---
 
 ## 言語仕様
 
-### 値
-すべて **倍精度浮動小数点 (double)**。真偽は `1.0`(真)/`0.0`(偽)。
+### 型
+`i8 i16 i32 i64`・`u8 u16 u32 u64`・`f32 f64`・`bool`・`()`（unit）。
+整数リテラルの既定は **i32**、小数リテラルは **f64** ですが、文脈から型が決まります
+（例: `n: i64` のとき `n < 2` の `2` は `i64`）。**暗黙変換はなく**、`as` で明示変換します。
 
 ### 演算子（優先順位の高い順）
 
 | 演算子 | 意味 | 優先度 |
 |---|---|---|
+| `as` | 型キャスト | （後置） |
 | `*` `/` | 乗除 | 40 |
 | `+` `-` | 加減 | 20 |
-| `<` `>` | 比較（結果は 1.0/0.0） | 10 |
+| `<` `>` | 比較（結果は bool） | 10 |
 
 ### 関数定義 / 外部宣言
 
 ```
-def add(a b) a + b;          # 引数はスペース区切り、本体は 1 つの式
-def fib(n)
+fn add(a: i64, b: i64) -> i64 = a + b;   # 型付き引数・`-> 型` の戻り値・`= 式` の本体
+fn fib(n: i64) -> i64 =
   if n < 2 then n
-  else fib(n-1) + fib(n-2);
+  else fib(n - 1) + fib(n - 2);
 
-extern sin(x);               # 標準ライブラリ等の外部関数を宣言して呼べる
-sin(0);                      # => 0
+extern sin(x: f64) -> f64;               # 外部関数 (libm 等) を宣言して呼べる
+sin(0.0);                                # => 0
+```
+
+`-> 型` を省略すると戻り値型は `()`（unit）になります。
+
+### キャスト
+
+```
+9 as f64;        # i32 → f64
+3.9 as i64;      # f64 → i64（切り捨て）→ 3
 ```
 
 ### if / then / else（式）
 
 ```
-if cond then expr1 else expr2    # cond が 0 以外なら expr1、そうでなければ expr2
+if cond then expr1 else expr2    # cond は bool 型。両分岐は同じ型である必要がある
 ```
 
-### for ループ（前判定）
+### for ループ（前判定・値は unit）
 
 ```
-for i = start, cond, step in body
-# cond が成り立つ間 body を実行し、各反復後に i += step（step 省略時は 1）
-# 値は常に 0 を返す
-for i = 1, i < 6, 1 in printd(i*i);   # 1 4 9 16 25
+for i = start, cond, step in body   # cond(bool) が成り立つ間、各反復後に i += step
+for i = 1, i < 6, 1 in printi(i as i64);   # 1 2 3 4 5（step 省略時は 1）
 ```
 
 ### 組み込み関数
-- `printd(x)` … x を 1 行で表示
-- `putchard(x)` … 文字コード x の 1 文字を出力（例: `putchard(10)` で改行）
+- `printi(x: i64)` … 整数を 1 行で表示
+- `printd(x: f64)` … 浮動小数点を 1 行で表示
+- `putchard(x: i64)` … 文字コード x の 1 文字を出力（例: `putchard(10)` で改行）
 
 ### コメント
 `#` から行末まで。
@@ -102,26 +116,28 @@ kal/
 │   ├── SourceManager.h      #   ソース・span・行/列
 │   ├── Diagnostic.h         #   span 付き rustc 風診断
 │   ├── Token.h  Lexer.h     #   トークン + 字句解析
+│   ├── Type.h               #   型システム
 │   ├── AST.h    Parser.h    #   codegen を持たない AST + 構文解析
-│   └── CodeGen.h            #   AST → LLVM IR
+│   ├── Sema.h               #   型検査 (AST に型を注釈)
+│   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern
+├── examples/                # arith, fib, loop, extern, cast
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```
 
-パイプラインは段階的: `Lexer → Parser(AST) → CodeGen(LLVM IR) → ORC JIT`。
-AST は codegen ロジックを持たず、`CodeGen` が別に走査するため、各段が独立して
-拡張できます（型付き HIR・MIR・借用チェッカへ。[ROADMAP.md](ROADMAP.md) 参照）。
+パイプラインは段階的: `Lexer → Parser(AST) → Sema(型付きAST) → CodeGen(LLVM IR) → ORC JIT`。
+AST は codegen ロジックを持たず、`Sema` が型を注釈し `CodeGen` が別に走査するため、各段が
+独立して拡張できます（本格的な HIR・MIR・借用チェッカへ。[ROADMAP.md](ROADMAP.md) 参照）。
 
 診断はソースの該当箇所を正確に指します:
 
 ```
-error[E0100]: 未定義の変数です
- --> prog.kal:2:9
+error[E0121]: 二項演算の両辺の型が一致しません (i32 と f64)
+ --> prog.kal:1:1
   |
-2 | def f() x;
-  |         ^
+1 | 1 + 2.0;
+  | ^^^^^^^
 ```
 
 ## テスト

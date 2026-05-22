@@ -8,6 +8,7 @@
 #include "kal/Diagnostic.h"
 #include "kal/Lexer.h"
 #include "kal/Parser.h"
+#include "kal/Sema.h"
 #include "kal/SourceManager.h"
 
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
@@ -17,6 +18,7 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -28,15 +30,13 @@ using namespace llvm;
 // JIT から呼べる組み込み関数
 //===----------------------------------------------------------------------===//
 
-extern "C" double printd(double x) {
-  std::printf("%g\n", x);
-  return 0;
+extern "C" void printi(int64_t x) {
+  std::printf("%lld\n", static_cast<long long>(x));
 }
 
-extern "C" double putchard(double x) {
-  std::putchar(static_cast<int>(x));
-  return 0;
-}
+extern "C" void printd(double x) { std::printf("%g\n", x); }
+
+extern "C" void putchard(int64_t x) { std::putchar(static_cast<int>(x)); }
 
 //===----------------------------------------------------------------------===//
 
@@ -93,6 +93,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // 型検査 (AST に型を注釈)
+  Sema sema(diag);
+  if (!sema.run(prog)) {
+    errs() << diag.numErrors() << " 個のエラーで中断しました\n";
+    return 1;
+  }
+
   // LLVM 初期化
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
@@ -124,6 +131,8 @@ int main(int argc, char **argv) {
 
   // 組み込み関数を JIT のシンボルとして登録
   orc::SymbolMap syms;
+  syms[jit->mangleAndIntern("printi")] = {orc::ExecutorAddr::fromPtr(&printi),
+                                          JITSymbolFlags::Exported};
   syms[jit->mangleAndIntern("printd")] = {orc::ExecutorAddr::fromPtr(&printd),
                                           JITSymbolFlags::Exported};
   syms[jit->mangleAndIntern("putchard")] = {

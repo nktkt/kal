@@ -1,0 +1,3 @@
+# Mixing an integer and a float in one operation is a type error
+# (no implicit conversions — an explicit `as` cast is required).
+1 + 2.0;

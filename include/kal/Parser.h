@@ -22,6 +22,7 @@ private:
   void recover(); // エラー後 ';' まで読み飛ばして再同期
 
   ExprPtr parseExpression();
+  ExprPtr parseUnary(); // primary に後置 `as` キャストを付ける
   ExprPtr parsePrimary();
   ExprPtr parseBinOpRHS(int exprPrec, ExprPtr lhs);
   ExprPtr parseNumberExpr();
@@ -29,6 +30,8 @@ private:
   ExprPtr parseIdentifierExpr();
   ExprPtr parseIfExpr();
   ExprPtr parseForExpr();
+
+  bool parseType(Type &out); // 型名を 1 つ読む
 
   std::unique_ptr<Prototype> parsePrototype();
   std::unique_ptr<FunctionDef> parseDefinition();

@@ -1,0 +1,6 @@
+error[E0130]: if の条件は bool 型である必要があります (実際 i64)
+ --> tests/diagnostics/non_bool_condition.kal:2:26
+  |
+2 | fn f(n: i64) -> i64 = if n then 1 else 2;
+  |                          ^
+1 個のエラーで中断しました

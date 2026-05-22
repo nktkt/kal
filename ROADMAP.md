@@ -64,7 +64,7 @@ Effort key: **S** ≤1 mo · **M** 1–3 mo · **L** 3–6 mo · **XL** 6 mo+ (s
 
 ### Horizon A — Foundations (near term)
 
-#### Phase 0 — Compiler re-architecture · **L** · → v0.2
+#### Phase 0 — Compiler re-architecture · **L** · → v0.2 · ✅ done
 The single-pass design cannot scale to a real language. Rebuild the skeleton.
 - Source manager: multi-file input, byte spans, line/column mapping.
 - **Diagnostics engine**: errors/warnings with spans, severity, error codes, colored output, and `--error-format=json` for tools.
@@ -74,12 +74,14 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 - **CI** (GitHub Actions): build + test on Linux/macOS, every PR.
 - *Exit:* current v0.1 features work on the new pipeline, fully tested, CI green.
 
-#### Phase 1 — Static type system (monomorphic core) · **L** · → v0.3
-- Primitive types: `i8…i64`, `u8…u64`, `f32`, `f64`, `bool`, `char`, `()` (unit).
-- Typed function signatures; **local type inference** (bidirectional / HM-lite).
-- HIR layer with full type information; type errors via the diagnostics engine.
-- Replace the "everything is a double" model.
-- *Exit:* programs are type-checked; mismatches produce precise errors.
+#### Phase 1 — Static type system (monomorphic core) · **L** · → v0.3 · ✅ done
+- Primitive types: `i8…i64`, `u8…u64`, `f32`, `f64`, `bool`, `()` (unit). ✅ (`char` deferred)
+- Typed function signatures (`fn f(x: T) -> T`); **bidirectional literal inference**. ✅
+- A `Sema` type-checker annotates the AST with types; precise type errors via the
+  diagnostics engine. (A separate HIR tree is deferred — the typed AST plays that role.)
+- No implicit numeric conversions — explicit `as` casts. The "everything is a
+  double" model is gone. ✅
+- *Exit:* programs are type-checked; mismatches produce precise errors. ✅
 
 ### Horizon B — A real language (mid term)
 

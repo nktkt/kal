@@ -1,8 +1,9 @@
-# extern で標準ライブラリの関数を宣言して呼べる
-extern sin(x);
-extern cos(x);
-extern sqrt(x);
+# extern で標準ライブラリの関数を型付きで宣言して呼ぶ
 
-sin(0);      # => 0
-cos(0);      # => 1
-sqrt(2);     # => 1.41421
+extern sin(x: f64) -> f64;
+extern cos(x: f64) -> f64;
+extern sqrt(x: f64) -> f64;
+
+sin(0.0);      # => 0
+cos(0.0);      # => 1
+sqrt(2.0);     # => 1.41421

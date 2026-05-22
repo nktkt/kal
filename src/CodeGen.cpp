@@ -1,8 +1,13 @@
-//===- CodeGen.cpp ---------------------------------------------------------===//
+//===- CodeGen.cpp - lowers the typed AST to LLVM IR ----------------------===//
+//
+// Sema が各 Expr に型を注釈済みなので、ここでは型に従って整数/浮動小数点の
+// 命令を選ぶだけ。型エラーは起きない前提 (起きたら内部バグ)。
+//
+//===----------------------------------------------------------------------===//
 #include "kal/CodeGen.h"
 
-#include "llvm/ADT/APFloat.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Verifier.h"
 
@@ -12,7 +17,22 @@ using namespace llvm;
 CodeGen::CodeGen(LLVMContext &ctx, DiagnosticEngine &diag)
     : ctx_(ctx), diag_(diag), builder_(ctx) {}
 
-Type *CodeGen::doubleTy() { return Type::getDoubleTy(ctx_); }
+llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
+  switch (t.kind) {
+  case kal::Type::Kind::Bool:
+    return llvm::Type::getInt1Ty(ctx_);
+  case kal::Type::Kind::Int:
+    return llvm::Type::getIntNTy(ctx_, t.bits);
+  case kal::Type::Kind::Float:
+    return t.bits == 32 ? llvm::Type::getFloatTy(ctx_)
+                        : llvm::Type::getDoubleTy(ctx_);
+  case kal::Type::Kind::Unit:
+    return llvm::Type::getVoidTy(ctx_);
+  case kal::Type::Kind::Unknown:
+    return nullptr;
+  }
+  return nullptr;
+}
 
 Value *CodeGen::genExpr(const Expr *e) {
   switch (e->kind) {
@@ -28,76 +48,100 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genIf(static_cast<const IfExpr *>(e));
   case Expr::Kind::For:
     return genFor(static_cast<const ForExpr *>(e));
+  case Expr::Kind::Cast:
+    return genCast(static_cast<const CastExpr *>(e));
   }
   return nullptr;
 }
 
 Value *CodeGen::genNumber(const NumberExpr *e) {
-  return ConstantFP::get(ctx_, APFloat(e->value));
+  if (e->isFloat)
+    return ConstantFP::get(toLLVM(e->type), e->floatValue);
+  return ConstantInt::get(toLLVM(e->type), e->intValue, e->type.isSigned);
 }
 
 Value *CodeGen::genVariable(const VariableExpr *e) {
-  auto it = namedValues_.find(e->name);
-  if (it == namedValues_.end()) {
-    diag_.error(e->span, "E0100", "未定義の変数です");
-    return nullptr;
-  }
-  return it->second;
+  return namedValues_[e->name];
 }
 
 Value *CodeGen::genBinary(const BinaryExpr *e) {
   Value *l = genExpr(e->lhs.get());
   Value *r = genExpr(e->rhs.get());
-  if (!l || !r)
-    return nullptr;
+  const kal::Type &ot = e->lhs->type; // 両辺は同じ型 (Sema 保証)
+  bool isF = ot.isFloat();
+  bool sgn = ot.isInt() ? ot.isSigned : true;
 
   switch (e->op) {
   case Tok::Plus:
-    return builder_.CreateFAdd(l, r, "addtmp");
+    return isF ? builder_.CreateFAdd(l, r, "addtmp")
+               : builder_.CreateAdd(l, r, "addtmp");
   case Tok::Minus:
-    return builder_.CreateFSub(l, r, "subtmp");
+    return isF ? builder_.CreateFSub(l, r, "subtmp")
+               : builder_.CreateSub(l, r, "subtmp");
   case Tok::Star:
-    return builder_.CreateFMul(l, r, "multmp");
+    return isF ? builder_.CreateFMul(l, r, "multmp")
+               : builder_.CreateMul(l, r, "multmp");
   case Tok::Slash:
-    return builder_.CreateFDiv(l, r, "divtmp");
+    if (isF)
+      return builder_.CreateFDiv(l, r, "divtmp");
+    return sgn ? builder_.CreateSDiv(l, r, "divtmp")
+               : builder_.CreateUDiv(l, r, "divtmp");
   case Tok::Less:
-    l = builder_.CreateFCmpULT(l, r, "cmptmp");
-    return builder_.CreateUIToFP(l, doubleTy(), "booltmp");
+    if (isF)
+      return builder_.CreateFCmpULT(l, r, "cmptmp");
+    return sgn ? builder_.CreateICmpSLT(l, r, "cmptmp")
+               : builder_.CreateICmpULT(l, r, "cmptmp");
   case Tok::Greater:
-    l = builder_.CreateFCmpUGT(l, r, "cmptmp");
-    return builder_.CreateUIToFP(l, doubleTy(), "booltmp");
+    if (isF)
+      return builder_.CreateFCmpUGT(l, r, "cmptmp");
+    return sgn ? builder_.CreateICmpSGT(l, r, "cmptmp")
+               : builder_.CreateICmpUGT(l, r, "cmptmp");
   default:
-    diag_.error(e->opSpan, "E0101", "未知の二項演算子です");
     return nullptr;
   }
 }
 
 Value *CodeGen::genCall(const CallExpr *e) {
   Function *callee = module_->getFunction(e->callee);
-  if (!callee) {
-    diag_.error(e->calleeSpan, "E0102", "未定義の関数を呼び出しています");
-    return nullptr;
-  }
-  if (callee->arg_size() != e->args.size()) {
-    diag_.error(e->span, "E0103", "引数の数が一致しません");
-    return nullptr;
-  }
   std::vector<Value *> args;
-  for (auto &a : e->args) {
-    Value *v = genExpr(a.get());
-    if (!v)
-      return nullptr;
-    args.push_back(v);
-  }
-  return builder_.CreateCall(callee, args, "calltmp");
+  for (auto &a : e->args)
+    args.push_back(genExpr(a.get()));
+  CallInst *call = builder_.CreateCall(callee, args);
+  if (e->type.isUnit())
+    return nullptr;
+  call->setName("calltmp");
+  return call;
+}
+
+Value *CodeGen::genCast(const CastExpr *e) {
+  Value *v = genExpr(e->operand.get());
+  const kal::Type &src = e->operand->type;
+  const kal::Type &dst = e->targetType;
+  if (src == dst)
+    return v;
+  llvm::Type *dstTy = toLLVM(dst);
+
+  if (src.isInt() && dst.isInt())
+    return builder_.CreateIntCast(v, dstTy, src.isSigned, "cast");
+  if (src.isFloat() && dst.isFloat())
+    return builder_.CreateFPCast(v, dstTy, "cast");
+  if (src.isInt() && dst.isFloat())
+    return src.isSigned ? builder_.CreateSIToFP(v, dstTy, "cast")
+                        : builder_.CreateUIToFP(v, dstTy, "cast");
+  if (src.isFloat() && dst.isInt())
+    return dst.isSigned ? builder_.CreateFPToSI(v, dstTy, "cast")
+                        : builder_.CreateFPToUI(v, dstTy, "cast");
+  if (src.isBool() && dst.isInt())
+    return builder_.CreateZExt(v, dstTy, "cast");
+  if (src.isBool() && dst.isFloat())
+    return builder_.CreateUIToFP(v, dstTy, "cast");
+  if (src.isInt() && dst.isBool())
+    return builder_.CreateICmpNE(v, ConstantInt::get(toLLVM(src), 0), "cast");
+  return v;
 }
 
 Value *CodeGen::genIf(const IfExpr *e) {
-  Value *condV = genExpr(e->cond.get());
-  if (!condV)
-    return nullptr;
-  condV = builder_.CreateFCmpONE(condV, ConstantFP::get(ctx_, APFloat(0.0)),
-                                 "ifcond");
+  Value *condV = genExpr(e->cond.get()); // 既に i1 (bool)
 
   Function *fn = builder_.GetInsertBlock()->getParent();
   BasicBlock *thenBB = BasicBlock::Create(ctx_, "then", fn);
@@ -108,32 +152,30 @@ Value *CodeGen::genIf(const IfExpr *e) {
 
   builder_.SetInsertPoint(thenBB);
   Value *thenV = genExpr(e->then.get());
-  if (!thenV)
-    return nullptr;
   builder_.CreateBr(mergeBB);
   thenBB = builder_.GetInsertBlock();
 
   fn->insert(fn->end(), elseBB);
   builder_.SetInsertPoint(elseBB);
   Value *elseV = genExpr(e->els.get());
-  if (!elseV)
-    return nullptr;
   builder_.CreateBr(mergeBB);
   elseBB = builder_.GetInsertBlock();
 
   fn->insert(fn->end(), mergeBB);
   builder_.SetInsertPoint(mergeBB);
-  PHINode *phi = builder_.CreatePHI(doubleTy(), 2, "iftmp");
+
+  if (e->type.isUnit())
+    return nullptr; // 両分岐 unit: 値なし
+
+  PHINode *phi = builder_.CreatePHI(toLLVM(e->type), 2, "iftmp");
   phi->addIncoming(thenV, thenBB);
   phi->addIncoming(elseV, elseBB);
   return phi;
 }
 
 Value *CodeGen::genFor(const ForExpr *e) {
-  // 前判定ループ:  preheader → [cond] →(真) body → cond ...  →(偽) after
+  const kal::Type &vt = e->start->type; // ループ変数の型
   Value *startV = genExpr(e->start.get());
-  if (!startV)
-    return nullptr;
 
   Function *fn = builder_.GetInsertBlock()->getParent();
   BasicBlock *preheaderBB = builder_.GetInsertBlock();
@@ -144,28 +186,28 @@ Value *CodeGen::genFor(const ForExpr *e) {
   builder_.CreateBr(condBB);
 
   builder_.SetInsertPoint(condBB);
-  PHINode *var = builder_.CreatePHI(doubleTy(), 2, e->var);
+  PHINode *var = builder_.CreatePHI(toLLVM(vt), 2, e->var);
   var->addIncoming(startV, preheaderBB);
 
   Value *oldVal = namedValues_.count(e->var) ? namedValues_[e->var] : nullptr;
   namedValues_[e->var] = var;
 
-  Value *condV = genExpr(e->cond.get());
-  if (!condV)
-    return nullptr;
-  condV = builder_.CreateFCmpONE(condV, ConstantFP::get(ctx_, APFloat(0.0)),
-                                 "loopcheck");
+  Value *condV = genExpr(e->cond.get()); // i1
   builder_.CreateCondBr(condV, bodyBB, afterBB);
 
   builder_.SetInsertPoint(bodyBB);
-  if (!genExpr(e->body.get()))
-    return nullptr;
+  genExpr(e->body.get()); // 値は捨てる
 
-  Value *stepV = e->step ? genExpr(e->step.get())
-                         : ConstantFP::get(ctx_, APFloat(1.0));
-  if (!stepV)
-    return nullptr;
-  Value *nextVar = builder_.CreateFAdd(var, stepV, "nextvar");
+  Value *stepV;
+  if (e->step)
+    stepV = genExpr(e->step.get());
+  else if (vt.isFloat())
+    stepV = ConstantFP::get(toLLVM(vt), 1.0);
+  else
+    stepV = ConstantInt::get(toLLVM(vt), 1, vt.isSigned);
+
+  Value *nextVar = vt.isFloat() ? builder_.CreateFAdd(var, stepV, "nextvar")
+                                : builder_.CreateAdd(var, stepV, "nextvar");
   BasicBlock *bodyEndBB = builder_.GetInsertBlock();
   builder_.CreateBr(condBB);
   var->addIncoming(nextVar, bodyEndBB);
@@ -177,12 +219,14 @@ Value *CodeGen::genFor(const ForExpr *e) {
   else
     namedValues_.erase(e->var);
 
-  return ConstantFP::get(ctx_, APFloat(0.0));
+  return nullptr; // for は unit
 }
 
 Function *CodeGen::declareProto(const Prototype &p) {
-  std::vector<Type *> doubles(p.args.size(), doubleTy());
-  FunctionType *ft = FunctionType::get(doubleTy(), doubles, false);
+  std::vector<llvm::Type *> params;
+  for (auto &pt : p.paramTypes)
+    params.push_back(toLLVM(pt));
+  FunctionType *ft = FunctionType::get(toLLVM(p.retType), params, false);
   Function *fn =
       Function::Create(ft, Function::ExternalLinkage, p.name, module_.get());
   unsigned i = 0;
@@ -204,11 +248,10 @@ bool CodeGen::genFunction(const FunctionDef &f) {
     namedValues_[std::string(arg.getName())] = &arg;
 
   Value *ret = genExpr(f.body.get());
-  if (!ret) {
-    fn->eraseFromParent();
-    return false;
-  }
-  builder_.CreateRet(ret);
+  if (f.proto->retType.isUnit())
+    builder_.CreateRetVoid();
+  else
+    builder_.CreateRet(ret);
   verifyFunction(*fn);
   return true;
 }
@@ -223,32 +266,50 @@ std::unique_ptr<Module> CodeGen::run(const Program &program) {
     if (!module_->getFunction(f->proto->name))
       declareProto(*f->proto);
 
-  // 組み込み printd / putchard
-  FunctionType *ft = FunctionType::get(doubleTy(), {doubleTy()}, false);
-  if (!module_->getFunction("printd"))
-    Function::Create(ft, Function::ExternalLinkage, "printd", module_.get());
-  if (!module_->getFunction("putchard"))
-    Function::Create(ft, Function::ExternalLinkage, "putchard", module_.get());
+  // 組み込み: printi(i64)->i64, printd(f64)->f64, putchard(i64)->i64
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *f64 = llvm::Type::getDoubleTy(ctx_);
+  auto ensure = [&](const char *name, llvm::Type *ret,
+                    ArrayRef<llvm::Type *> params) {
+    if (!module_->getFunction(name))
+      Function::Create(FunctionType::get(ret, params, false),
+                       Function::ExternalLinkage, name, module_.get());
+  };
+  llvm::Type *voidTy = llvm::Type::getVoidTy(ctx_);
+  ensure("printi", voidTy, {i64});
+  ensure("printd", voidTy, {f64});
+  ensure("putchard", voidTy, {i64});
 
   // (2) 関数本体
   for (auto &f : program.functions)
     if (!genFunction(*f))
       return nullptr;
 
-  // (3) トップレベル式を集めて __main を生成
-  FunctionType *mainTy = FunctionType::get(Type::getVoidTy(ctx_), false);
-  llvm::Function *mainFn =
-      Function::Create(mainTy, Function::ExternalLinkage, "__main", module_.get());
-  BasicBlock *bb = BasicBlock::Create(ctx_, "entry", mainFn);
-  builder_.SetInsertPoint(bb);
+  // (3) トップレベル式を集めて __main を生成 (型に応じて自動表示)
+  FunctionType *mainTy = FunctionType::get(llvm::Type::getVoidTy(ctx_), false);
+  llvm::Function *mainFn = Function::Create(mainTy, Function::ExternalLinkage,
+                                            "__main", module_.get());
+  builder_.SetInsertPoint(BasicBlock::Create(ctx_, "entry", mainFn));
   namedValues_.clear();
 
+  llvm::Function *printiFn = module_->getFunction("printi");
   llvm::Function *printdFn = module_->getFunction("printd");
+
   for (auto &e : program.topExprs) {
     Value *v = genExpr(e.get());
-    if (!v)
-      return nullptr;
-    builder_.CreateCall(printdFn, {v});
+    const kal::Type &t = e->type;
+    if (t.isUnit())
+      continue; // unit は表示しない
+    if (t.isFloat()) {
+      Value *d = t.bits == 32 ? builder_.CreateFPExt(v, f64, "pf") : v;
+      builder_.CreateCall(printdFn, {d});
+    } else if (t.isInt()) {
+      Value *i = builder_.CreateIntCast(v, i64, t.isSigned, "pi");
+      builder_.CreateCall(printiFn, {i});
+    } else if (t.isBool()) {
+      Value *i = builder_.CreateZExt(v, i64, "pb");
+      builder_.CreateCall(printiFn, {i});
+    }
   }
   builder_.CreateRetVoid();
   verifyFunction(*mainFn);

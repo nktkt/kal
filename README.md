@@ -9,14 +9,18 @@ Kal is a minimal "calculator / expression" language (in the spirit of LLVM's
 on the fly with an **ORC JIT**.
 
 ```
-source → [Lexer] → tokens → [Parser] → AST → [CodeGen] → LLVM IR → [ORC JIT] → run
+source → [Lexer] → tokens → [Parser] → AST → [Sema] → typed AST → [CodeGen] → LLVM IR → [ORC JIT] → run
 ```
 
+It is **statically typed** (`i8`…`i64`, `u8`…`u64`, `f32`, `f64`, `bool`) with a
+type checker that infers literal types from context and reports precise errors;
+there are no implicit numeric conversions (use `as`).
+
 The compiler is split into small, focused units under `src/` and `include/kal/`
-(source manager, span-aware diagnostics, lexer, parser, a codegen-free AST, and
-codegen), so it doubles as a readable introduction to building a real language
-frontend on LLVM. This layered structure is the foundation for the long-term
-plan in [ROADMAP.md](ROADMAP.md).
+(source manager, span-aware diagnostics, lexer, parser, a codegen-free AST, a
+type checker, and codegen), so it doubles as a readable introduction to building
+a real language frontend on LLVM. This layered structure is the foundation for
+the long-term plan in [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -44,55 +48,66 @@ echo '1 + 2 * 3;' | ./build/kalc    # one-liner → 7
 ./build/kalc --emit-ir examples/fib.kal   # print the generated LLVM IR (no run)
 ```
 
-Top-level expressions are **auto-printed** (calculator / REPL behaviour).
-Everything is an expression that yields a value, so statements like loops and
-`putchard` — which return `0` — also print `0`.
+Top-level expressions are **auto-printed** by type (integers, floats, bools).
+Expressions of type `()` (unit) — loops and the print built-ins — print nothing.
 
 ---
 
 ## Language reference
 
-### Values
-Everything is a **double** (64-bit float). Booleans are `1.0` (true) / `0.0` (false).
+### Types
+`i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, and `()` (unit).
+Integer literals default to **i32**, float literals to **f64**, but a literal
+takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
+There are **no implicit conversions** — convert explicitly with `as`.
 
 ### Operators (highest precedence first)
 
 | Operator | Meaning            | Precedence |
 |----------|--------------------|-----------|
+| `as`     | type cast          | (postfix) |
 | `*` `/`  | multiply / divide  | 40        |
 | `+` `-`  | add / subtract     | 20        |
-| `<` `>`  | comparison (→1/0)  | 10        |
+| `<` `>`  | comparison (→ bool)| 10        |
 
 ### Functions and externs
 
 ```
-def add(a b) a + b;          # args are space-separated; body is a single expression
-def fib(n)
+fn add(a: i64, b: i64) -> i64 = a + b;   # typed params, `-> T` return, `= expr` body
+fn fib(n: i64) -> i64 =
   if n < 2 then n
-  else fib(n-1) + fib(n-2);
+  else fib(n - 1) + fib(n - 2);
 
-extern sin(x);               # declare and call external (e.g. libm) functions
-sin(0);                      # => 0
+extern sin(x: f64) -> f64;               # declare & call external (e.g. libm) functions
+sin(0.0);                                # => 0
+```
+
+Omitting `-> T` makes the return type `()` (unit).
+
+### Casts
+
+```
+9 as f64;        # i32 → f64
+3.9 as i64;      # f64 → i64 (truncates) → 3
 ```
 
 ### if / then / else (an expression)
 
 ```
-if cond then expr1 else expr2    # expr1 when cond != 0, otherwise expr2
+if cond then expr1 else expr2    # cond must be bool; both branches share one type
 ```
 
-### for loop (pre-tested)
+### for loop (pre-tested, evaluates to unit)
 
 ```
-for i = start, cond, step in body
-# runs body while cond holds, doing i += step after each iteration
-# (step defaults to 1); the loop expression always evaluates to 0
-for i = 1, i < 6, 1 in printd(i*i);   # 1 4 9 16 25
+for i = start, cond, step in body   # while cond (bool) holds; i += step each iteration
+for i = 1, i < 6, 1 in printi(i as i64);   # 1 2 3 4 5  (step defaults to 1)
 ```
 
 ### Built-ins
-- `printd(x)` — print `x` on its own line
-- `putchard(x)` — write the character with code `x` (e.g. `putchard(10)` is a newline)
+- `printi(x: i64)` — print an integer on its own line
+- `printd(x: f64)` — print a float on its own line
+- `putchard(x: i64)` — write the character with code `x` (`putchard(10)` is a newline)
 
 ### Comments
 `#` to end of line.
@@ -108,27 +123,29 @@ kal/
 │   ├── SourceManager.h      #   source files, byte spans, line/column
 │   ├── Diagnostic.h         #   span-aware, rustc-style error reporting
 │   ├── Token.h  Lexer.h     #   tokens + lexer
+│   ├── Type.h               #   the type system
 │   ├── AST.h    Parser.h    #   codegen-free AST + parser
-│   └── CodeGen.h            #   AST → LLVM IR
+│   ├── Sema.h               #   type checker (annotates the AST)
+│   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern
+├── examples/                # arith, fib, loop, extern, cast
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```
 
-The pipeline is layered: `Lexer → Parser (AST) → CodeGen (LLVM IR) → ORC JIT`.
-The AST carries no codegen logic — `CodeGen` walks it separately — which keeps
-each stage independent and ready to grow (typed HIR, MIR, a borrow checker; see
-[ROADMAP.md](ROADMAP.md)).
+The pipeline is layered: `Lexer → Parser (AST) → Sema (typed AST) → CodeGen
+(LLVM IR) → ORC JIT`. The AST carries no codegen logic — `Sema` annotates it
+with types and `CodeGen` walks it separately — which keeps each stage independent
+and ready to grow (a full HIR/MIR, a borrow checker; see [ROADMAP.md](ROADMAP.md)).
 
 Diagnostics point at the exact source span, e.g.:
 
 ```
-error[E0100]: 未定義の変数です
- --> prog.kal:2:9
+error[E0121]: 二項演算の両辺の型が一致しません (i32 と f64)
+ --> prog.kal:1:1
   |
-2 | def f() x;
-  |         ^
+1 | 1 + 2.0;
+  | ^^^^^^^
 ```
 
 ## Tests
