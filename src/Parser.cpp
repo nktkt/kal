@@ -87,9 +87,13 @@ bool Parser::parseType(Type &out) {
 ExprPtr Parser::parseParenExpr() {
   Span s = cur_.span;
   advance(); // '('
+  bool savedNSL = noStructLit_;
+  noStructLit_ = false; // 括弧の中では構造体リテラル可 (末尾で復元)
   auto first = parseExpression();
-  if (!first)
+  if (!first) {
+    noStructLit_ = savedNSL;
     return nullptr;
+  }
 
   if (cur_.kind == Tok::Comma) {
     // タプルリテラル
@@ -100,25 +104,31 @@ ExprPtr Parser::parseParenExpr() {
       if (cur_.kind == Tok::RParen)
         break; // 末尾カンマを許可
       auto e = parseExpression();
-      if (!e)
+      if (!e) {
+        noStructLit_ = savedNSL;
         return nullptr;
+      }
       elems.push_back(std::move(e));
     }
     if (cur_.kind != Tok::RParen) {
       diag_.error(cur_.span, "E0010", "')' が必要です");
+      noStructLit_ = savedNSL;
       return nullptr;
     }
     Span end = cur_.span;
     advance();
+    noStructLit_ = savedNSL;
     return std::make_unique<TupleLitExpr>(Span{s.fileId, s.start, end.end},
                                           std::move(elems));
   }
 
   if (cur_.kind != Tok::RParen) {
     diag_.error(cur_.span, "E0010", "')' が必要です");
+    noStructLit_ = savedNSL;
     return nullptr;
   }
   advance(); // ')'
+  noStructLit_ = savedNSL;
   return first;
 }
 
@@ -128,9 +138,12 @@ ExprPtr Parser::parseIdentifierExpr() {
   advance();
 
   // 構造体リテラル:  Name { f: e, ... }
-  if (cur_.kind == Tok::LBrace) {
+  // (noStructLit_ 中 = match の対象式などでは '{' を奪わない)
+  if (cur_.kind == Tok::LBrace && !noStructLit_) {
     advance();
     auto lit = std::make_unique<StructLitExpr>(idSpan, name, idSpan);
+    bool savedNSL = noStructLit_;
+    noStructLit_ = false; // フィールド値の中では構造体リテラル可
     if (cur_.kind != Tok::RBrace) {
       for (;;) {
         if (cur_.kind != Tok::Identifier) {
@@ -160,6 +173,7 @@ ExprPtr Parser::parseIdentifierExpr() {
     }
     Span end = cur_.span;
     advance(); // '}'
+    noStructLit_ = savedNSL;
     lit->span = {idSpan.fileId, idSpan.start, end.end};
     return lit;
   }
@@ -168,6 +182,8 @@ ExprPtr Parser::parseIdentifierExpr() {
     return std::make_unique<VariableExpr>(idSpan, std::move(name));
 
   advance(); // '('
+  bool savedNSLcall = noStructLit_;
+  noStructLit_ = false; // 引数の中では構造体リテラル可
   std::vector<ExprPtr> args;
   if (cur_.kind != Tok::RParen) {
     for (;;) {
@@ -186,6 +202,7 @@ ExprPtr Parser::parseIdentifierExpr() {
   }
   Span end = cur_.span;
   advance(); // ')'
+  noStructLit_ = savedNSLcall;
   Span full{idSpan.fileId, idSpan.start, end.end};
   return std::make_unique<CallExpr>(full, std::move(name), idSpan,
                                     std::move(args));
@@ -276,6 +293,8 @@ ExprPtr Parser::parsePrimary() {
     return parseForExpr();
   case Tok::Let:
     return parseLetExpr();
+  case Tok::Match:
+    return parseMatchExpr();
   default:
     diag_.error(cur_.span, "E0002", "式が必要です");
     return nullptr;
@@ -351,6 +370,83 @@ ExprPtr Parser::parseLetExpr() {
     return nullptr;
   return std::make_unique<LetExpr>(s, std::move(name), std::move(value),
                                    std::move(body));
+}
+
+ExprPtr Parser::parseMatchExpr() {
+  Span s = cur_.span;
+  advance(); // 'match'
+  bool savedNSL = noStructLit_;
+  noStructLit_ = true; // 対象式の直後の '{' は match のブロック
+  auto scrut = parseExpression();
+  noStructLit_ = savedNSL;
+  if (!scrut)
+    return nullptr;
+  if (cur_.kind != Tok::LBrace) {
+    diag_.error(cur_.span, "E0070", "match には '{' が必要です");
+    return nullptr;
+  }
+  advance();
+
+  auto me = std::make_unique<MatchExpr>(s, std::move(scrut));
+  while (cur_.kind != Tok::RBrace) {
+    MatchArm arm;
+    if (cur_.kind != Tok::Identifier) {
+      diag_.error(cur_.span, "E0071", "パターンが必要です");
+      return nullptr;
+    }
+    if (cur_.text == "_") {
+      arm.isWildcard = true;
+      arm.variantSpan = cur_.span;
+      advance();
+    } else {
+      arm.variant = cur_.text;
+      arm.variantSpan = cur_.span;
+      advance();
+      if (cur_.kind == Tok::LParen) { // ペイロード束縛
+        advance();
+        if (cur_.kind != Tok::RParen) {
+          for (;;) {
+            if (cur_.kind != Tok::Identifier) {
+              diag_.error(cur_.span, "E0072", "束縛名が必要です");
+              return nullptr;
+            }
+            arm.bindings.push_back(cur_.text);
+            arm.bindingSpans.push_back(cur_.span);
+            advance();
+            if (cur_.kind == Tok::RParen)
+              break;
+            if (cur_.kind != Tok::Comma) {
+              diag_.error(cur_.span, "E0073", "束縛には ',' か ')' が必要です");
+              return nullptr;
+            }
+            advance();
+          }
+        }
+        advance(); // ')'
+      }
+    }
+    if (cur_.kind != Tok::FatArrow) {
+      diag_.error(cur_.span, "E0074", "パターンの後には '=>' が必要です");
+      return nullptr;
+    }
+    advance();
+    auto body = parseExpression();
+    if (!body)
+      return nullptr;
+    arm.body = std::move(body);
+    me->arms.push_back(std::move(arm));
+    if (cur_.kind != Tok::Comma)
+      break;
+    advance(); // ',' (末尾カンマ可)
+  }
+  if (cur_.kind != Tok::RBrace) {
+    diag_.error(cur_.span, "E0075", "match には '}' が必要です");
+    return nullptr;
+  }
+  Span end = cur_.span;
+  advance(); // '}'
+  me->span = {s.fileId, s.start, end.end};
+  return me;
 }
 
 ExprPtr Parser::parseBinOpRHS(int exprPrec, ExprPtr lhs) {
@@ -526,6 +622,67 @@ std::unique_ptr<StructDef> Parser::parseStructDef() {
   return sd;
 }
 
+std::unique_ptr<EnumDef> Parser::parseEnumDef() {
+  Span start = cur_.span;
+  advance(); // 'enum'
+  if (cur_.kind != Tok::Identifier) {
+    diag_.error(cur_.span, "E0080", "enum 名が必要です");
+    return nullptr;
+  }
+  auto ed = std::make_unique<EnumDef>();
+  ed->name = cur_.text;
+  ed->nameSpan = cur_.span;
+  advance();
+
+  if (cur_.kind != Tok::LBrace) {
+    diag_.error(cur_.span, "E0081", "enum には '{' が必要です");
+    return nullptr;
+  }
+  advance();
+
+  while (cur_.kind != Tok::RBrace) {
+    if (cur_.kind != Tok::Identifier) {
+      diag_.error(cur_.span, "E0082", "バリアント名が必要です");
+      return nullptr;
+    }
+    EnumVariant v;
+    v.name = cur_.text;
+    v.span = cur_.span;
+    advance();
+    if (cur_.kind == Tok::LParen) { // ペイロード型
+      advance();
+      if (cur_.kind != Tok::RParen) {
+        for (;;) {
+          Type pt;
+          if (!parseType(pt))
+            return nullptr;
+          v.payloadTypes.push_back(pt);
+          if (cur_.kind == Tok::RParen)
+            break;
+          if (cur_.kind != Tok::Comma) {
+            diag_.error(cur_.span, "E0083", "ペイロードには ',' か ')' が必要です");
+            return nullptr;
+          }
+          advance();
+        }
+      }
+      advance(); // ')'
+    }
+    ed->variants.push_back(std::move(v));
+    if (cur_.kind != Tok::Comma)
+      break;
+    advance(); // ',' (末尾カンマ可)
+  }
+  if (cur_.kind != Tok::RBrace) {
+    diag_.error(cur_.span, "E0084", "enum には '}' が必要です");
+    return nullptr;
+  }
+  Span end = cur_.span;
+  advance(); // '}'
+  ed->span = {start.fileId, start.start, end.end};
+  return ed;
+}
+
 Program Parser::parseProgram() {
   Program prog;
   for (;;) {
@@ -538,6 +695,11 @@ Program Parser::parseProgram() {
     if (cur_.kind == Tok::Struct) {
       if (auto sd = parseStructDef())
         prog.structs.push_back(std::move(sd));
+      else
+        recover();
+    } else if (cur_.kind == Tok::Enum) {
+      if (auto ed = parseEnumDef())
+        prog.enums.push_back(std::move(ed));
       else
         recover();
     } else if (cur_.kind == Tok::Fn) {

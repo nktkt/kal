@@ -71,7 +71,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 
 ### Types
 `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), plus
-user-defined **`struct`s** and **tuples** `(T, U, …)`.
+user-defined **`struct`s**, **`enum`s** (algebraic data types), and **tuples**
+`(T, U, …)`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 There are **no implicit conversions** — convert explicitly with `as`.
@@ -134,6 +135,27 @@ let pair = (6, 7) in pair.0 * pair.1;           # => 42   (tuple + .0/.1)
 Structs and tuples are value types (passed/returned by value). `let name = e in
 body` binds an immutable local for `body`.
 
+### Enums & pattern matching
+
+```
+enum Shape {            # Rust-style algebraic data type (tagged union)
+  Circle(f64),
+  Rect(f64, f64),
+}
+
+fn area(s: Shape) -> f64 =
+  match s {             # match is checked for exhaustiveness
+    Circle(r)  => 3.14 * r * r,
+    Rect(w, h) => w * h,
+  };
+
+area(Circle(2.0));      # => 12.56   (variants are constructed by name)
+```
+
+A `match` arm is `Variant(bindings) => expr` or a `_` wildcard; it must cover
+every variant (or include `_`). Variant payloads are bound by the names in the
+pattern (`_` ignores one).
+
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
@@ -158,7 +180,7 @@ kal/
 │   ├── Sema.h               #   type checker (annotates the AST)
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct
+├── examples/                # arith, fib, loop, extern, cast, struct, enum
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

@@ -26,6 +26,11 @@ private:
     std::vector<Type> params;
     Type ret;
   };
+  struct VariantInfo {
+    std::string enumName;
+    int tag;
+    std::vector<Type> payloadTypes;
+  };
 
   Type check(Expr *e, std::optional<Type> expected);
   Type checkNumber(NumberExpr *e, std::optional<Type> expected);
@@ -40,14 +45,20 @@ private:
   Type checkTupleLit(TupleLitExpr *e, std::optional<Type> expected);
   Type checkTupleIndex(TupleIndexExpr *e);
   Type checkLet(LetExpr *e, std::optional<Type> expected);
+  Type checkMatch(MatchExpr *e, std::optional<Type> expected);
 
   void checkFunction(FunctionDef &f);
   const StructDef *findStruct(const std::string &name) const;
+  const EnumDef *findEnum(const std::string &name) const;
+  // パーサは未知の名前型を Struct 種として作る。enum 名なら Enum 種へ直す。
+  Type resolve(Type t) const;
 
   DiagnosticEngine &diag_;
   std::map<std::string, FuncSig> funcs_;
   std::map<std::string, Type> locals_;
   std::map<std::string, const StructDef *> structs_;
+  std::map<std::string, const EnumDef *> enums_;
+  std::map<std::string, VariantInfo> variants_;
 };
 
 } // namespace kal

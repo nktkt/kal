@@ -3,6 +3,7 @@
 
 #include "kal/AST.h"
 #include "kal/Diagnostic.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -14,7 +15,8 @@ namespace kal {
 
 class CodeGen {
 public:
-  CodeGen(llvm::LLVMContext &ctx, DiagnosticEngine &diag);
+  CodeGen(llvm::LLVMContext &ctx, DiagnosticEngine &diag,
+          const llvm::DataLayout &dl);
 
   /// Program を LLVM モジュールに変換する。
   /// emitRuntime=true なら自己完結バイナリ用に printi/printd/putchard の本体と
@@ -39,8 +41,13 @@ private:
   llvm::Value *genTupleLit(const TupleLitExpr *e);
   llvm::Value *genTupleIndex(const TupleIndexExpr *e);
   llvm::Value *genLet(const LetExpr *e);
+  llvm::Value *genMatch(const MatchExpr *e);
+  // enum バリアント構築 (tag + ペイロード)
+  llvm::Value *genVariant(const std::string &enumName, int tag,
+                          llvm::ArrayRef<llvm::Value *> payload);
 
   llvm::StructType *getStructType(const std::string &name); // 名前→LLVM構造体型
+  llvm::StructType *getEnumType(const std::string &name);   // 名前→タグ付き共用体
   llvm::Function *declareProto(const Prototype &p);
   bool genFunction(const FunctionDef &f);
   void emitRuntimeDefs(); // printi/printd/putchard の本体 (libc 呼び出し)
@@ -48,11 +55,14 @@ private:
 
   llvm::LLVMContext &ctx_;
   DiagnosticEngine &diag_;
+  llvm::DataLayout dl_;
   std::unique_ptr<llvm::Module> module_;
   llvm::IRBuilder<> builder_;
   std::map<std::string, llvm::Value *> namedValues_;
   std::map<std::string, const StructDef *> structDefs_;
   std::map<std::string, llvm::StructType *> structTypes_;
+  std::map<std::string, const EnumDef *> enumDefs_;
+  std::map<std::string, llvm::StructType *> enumTypes_;
 };
 
 } // namespace kal

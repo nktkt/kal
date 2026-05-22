@@ -1,0 +1,3 @@
+# The match does not cover every variant (B is missing) and has no wildcard.
+enum E { A, B }
+fn f(e: E) -> i64 = match e { A => 1 };

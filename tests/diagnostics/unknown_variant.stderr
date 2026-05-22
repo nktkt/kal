@@ -1,0 +1,6 @@
+error[E0091]: enum E にバリアント 'Zzz' はありません
+ --> tests/diagnostics/unknown_variant.kal:3:39
+  |
+3 | fn f(e: E) -> i64 = match e { A => 1, Zzz => 2 };
+  |                                       ^^^
+1 個のエラーで中断しました

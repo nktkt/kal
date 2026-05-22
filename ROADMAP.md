@@ -85,7 +85,7 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 
 ### Horizon B — A real language (mid term)
 
-#### Phase 2 — Aggregates, pattern matching & AOT · **L** · → v0.4 · 🟡 in progress
+#### Phase 2 — Aggregates, pattern matching & AOT · **L** · → v0.4 · ✅ done
 
 **2a — AOT & optimization · ✅ done**
 - **AOT compilation**: `kalc build` emits an object file via the host
@@ -102,11 +102,12 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 - Aggregates flow through Sema (typed) and CodeGen (`insertvalue`/`extractvalue`),
   and work in both JIT and AOT builds (tested). ✅
 
-**2b-ii — Sum types & pattern matching** *(next)*
-- `enum` (Rust-style algebraic data types with payloads).
-- `match` with exhaustiveness checking.
-- Later: fixed arrays, slices.
-- *Exit:* compile programs using user-defined sum types to native binaries.
+**2b-ii — Sum types & pattern matching · ✅ done**
+- `enum` (Rust-style algebraic data types with payloads); variants constructed
+  by name; lowered to a tagged union `{ i64 tag, [N x i8] payload }`. ✅
+- `match` with payload binding, `_` wildcards, and **exhaustiveness checking**. ✅
+- Works in JIT and AOT (tested).
+- Deferred to a later phase: fixed arrays, slices.
 
 #### Phase 3 — Ownership & borrow checking · **XL** · → v0.5 *(the differentiator)*
 - Move semantics; `Copy` vs move; affine types.

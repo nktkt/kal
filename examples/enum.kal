@@ -1,0 +1,30 @@
+# enum (Rust 流 ADT) と match (網羅性チェックつき)
+
+enum Shape {
+  Circle(f64),
+  Rect(f64, f64),
+}
+
+fn area(s: Shape) -> f64 =
+  match s {
+    Circle(r)  => 3.14 * r * r,
+    Rect(w, h) => w * h,
+  };
+
+area(Circle(2.0));        # => 12.56
+area(Rect(3.0, 4.0));     # => 12
+
+# enum を返す関数 + ワイルドカード
+fn bigger(a: f64, b: f64) -> Shape =
+  if a > b then Circle(a) else Rect(a, b);
+
+area(bigger(5.0, 2.0));   # => 78.5  (Circle(5))
+
+fn isRound(s: Shape) -> i64 =
+  match s {
+    Circle(_) => 1,
+    _         => 0,
+  };
+
+isRound(Circle(1.0));     # => 1
+isRound(Rect(1.0, 1.0));  # => 0

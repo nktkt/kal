@@ -1,0 +1,3 @@
+# A match arm names a variant that the enum does not have.
+enum E { A }
+fn f(e: E) -> i64 = match e { A => 1, Zzz => 2 };

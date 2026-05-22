@@ -1,0 +1,6 @@
+error[E0090]: match の対象は enum である必要があります (実際 i32)
+ --> tests/diagnostics/match_on_non_enum.kal:2:7
+  |
+2 | match 5 { _ => 0 };
+  |       ^
+1 個のエラーで中断しました

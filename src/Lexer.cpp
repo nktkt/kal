@@ -68,6 +68,10 @@ Token Lexer::next() {
       k = Tok::Struct;
     else if (s == "let")
       k = Tok::Let;
+    else if (s == "enum")
+      k = Tok::Enum;
+    else if (s == "match")
+      k = Tok::Match;
     t.text = s.str();
     return make(k);
   }
@@ -124,6 +128,10 @@ Token Lexer::next() {
   case '>':
     return make(Tok::Greater);
   case '=':
+    if (pos_ < buf_.size() && buf_[pos_] == '>') {
+      ++pos_;
+      return make(Tok::FatArrow); // =>
+    }
     return make(Tok::Equal);
   case ':':
     return make(Tok::Colon);

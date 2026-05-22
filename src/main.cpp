@@ -228,26 +228,23 @@ int main(int argc, char **argv) {
   InitializeNativeTargetAsmPrinter();
   InitializeNativeTargetAsmParser();
 
+  // ホスト TargetMachine は常に作る (enum のレイアウト計算と AOT 出力に必要)
+  std::unique_ptr<TargetMachine> tm = createHostTargetMachine();
+  if (!tm)
+    return 1;
+
   bool aot = (cmd == Cmd::Build || cmd == Cmd::EmitObj);
 
-  // コード生成
+  // コード生成 (DataLayout を渡す → run() 内でモジュールに設定)
   auto ctx = std::make_unique<LLVMContext>();
-  CodeGen cg(*ctx, diag);
+  CodeGen cg(*ctx, diag, tm->createDataLayout());
   auto module = cg.run(prog, /*emitRuntime=*/aot);
   if (!module) {
     errs() << diag.numErrors() << " 個のエラーで中断しました\n";
     return 1;
   }
-
-  // AOT はターゲット情報を先に設定 (最適化が data layout を使う)
-  std::unique_ptr<TargetMachine> tm;
-  if (aot) {
-    tm = createHostTargetMachine();
-    if (!tm)
-      return 1;
-    module->setDataLayout(tm->createDataLayout());
+  if (aot)
     module->setTargetTriple(Triple(sys::getDefaultTargetTriple()));
-  }
 
   // 最適化
   if (optLevel > 0) {

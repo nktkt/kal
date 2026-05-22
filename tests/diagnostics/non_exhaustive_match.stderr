@@ -1,0 +1,6 @@
+error[E0095]: match が網羅的ではありません (未処理: B)
+ --> tests/diagnostics/non_exhaustive_match.kal:3:21
+  |
+3 | fn f(e: E) -> i64 = match e { A => 1 };
+  |                     ^^^^^^^^^^^^^^^^^^
+1 個のエラーで中断しました

@@ -19,6 +19,8 @@ enum class Tok {
   As,
   Struct,
   Let,
+  Enum,
+  Match,
   // 主要トークン
   Identifier,
   Number,
@@ -30,9 +32,10 @@ enum class Tok {
   Less,
   Greater,
   Equal,
-  Arrow, // ->
-  Colon, // :
-  Dot,   // .
+  Arrow,    // ->
+  FatArrow, // =>
+  Colon,    // :
+  Dot,      // .
   LParen,
   RParen,
   LBrace, // {

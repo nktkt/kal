@@ -63,7 +63,7 @@ AOT バイナリは自己完結します（libc/libm のみリンク）。`kalc`
 
 ### 型
 `i8 i16 i32 i64`・`u8 u16 u32 u64`・`f32 f64`・`bool`・`()`（unit）に加え、
-ユーザー定義の **`struct`** とタプル `(T, U, …)`。
+ユーザー定義の **`struct`**・**`enum`**（代数的データ型）・タプル `(T, U, …)`。
 整数リテラルの既定は **i32**、小数リテラルは **f64** ですが、文脈から型が決まります
 （例: `n: i64` のとき `n < 2` の `2` は `i64`）。**暗黙変換はなく**、`as` で明示変換します。
 
@@ -125,6 +125,27 @@ let pair = (6, 7) in pair.0 * pair.1;           # => 42   (タプル + .0/.1)
 構造体・タプルは値型（値渡し・値返し）。`let name = e in body` は `body` の中だけで
 有効な不変ローカル束縛です。
 
+### enum とパターンマッチ
+
+```
+enum Shape {            # Rust 流の代数的データ型 (タグ付き共用体)
+  Circle(f64),
+  Rect(f64, f64),
+}
+
+fn area(s: Shape) -> f64 =
+  match s {             # match は網羅性がチェックされる
+    Circle(r)  => 3.14 * r * r,
+    Rect(w, h) => w * h,
+  };
+
+area(Circle(2.0));      # => 12.56   (バリアントは名前で構築)
+```
+
+match のアームは `Variant(束縛) => 式` または `_`（ワイルドカード）。全バリアントを
+網羅する（または `_` を含む）必要があります。ペイロードはパターンの名前に束縛されます
+（`_` は無視）。
+
 ### 組み込み関数
 - `printi(x: i64)` … 整数を 1 行で表示
 - `printd(x: f64)` … 浮動小数点を 1 行で表示
@@ -149,7 +170,7 @@ kal/
 │   ├── Sema.h               #   型検査 (AST に型を注釈)
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct
+├── examples/                # arith, fib, loop, extern, cast, struct, enum
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

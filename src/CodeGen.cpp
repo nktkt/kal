@@ -10,13 +10,16 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/Alignment.h"
 
 using namespace kal;
 using namespace llvm;
 
-CodeGen::CodeGen(LLVMContext &ctx, DiagnosticEngine &diag)
-    : ctx_(ctx), diag_(diag), builder_(ctx) {}
+CodeGen::CodeGen(LLVMContext &ctx, DiagnosticEngine &diag,
+                 const DataLayout &dl)
+    : ctx_(ctx), diag_(diag), dl_(dl), builder_(ctx) {}
 
 llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
   switch (t.kind) {
@@ -31,6 +34,8 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
     return llvm::Type::getVoidTy(ctx_);
   case kal::Type::Kind::Struct:
     return getStructType(t.name);
+  case kal::Type::Kind::Enum:
+    return getEnumType(t.name);
   case kal::Type::Kind::Tuple: {
     std::vector<llvm::Type *> elems;
     for (auto &e : t.elems)
@@ -54,6 +59,53 @@ StructType *CodeGen::getStructType(const std::string &name) {
   StructType *st = StructType::create(ctx_, fieldTys, name);
   structTypes_[name] = st;
   return st;
+}
+
+// enum を { i64 tag, [S x i8] payload } で表す (S = 最大バリアントのサイズ)。
+// tag を i64 にすることで payload が 8 バイト境界に整列する。
+StructType *CodeGen::getEnumType(const std::string &name) {
+  auto it = enumTypes_.find(name);
+  if (it != enumTypes_.end())
+    return it->second;
+  const EnumDef *ed = enumDefs_[name];
+  uint64_t maxSize = 0;
+  for (auto &v : ed->variants) {
+    std::vector<llvm::Type *> fts;
+    for (auto &pt : v.payloadTypes)
+      fts.push_back(toLLVM(pt));
+    StructType *vs = StructType::get(ctx_, fts);
+    maxSize = std::max(maxSize, dl_.getTypeAllocSize(vs).getFixedValue());
+  }
+  llvm::Type *tag = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *payload = ArrayType::get(llvm::Type::getInt8Ty(ctx_), maxSize);
+  StructType *et = StructType::create(ctx_, {tag, payload}, name);
+  enumTypes_[name] = et;
+  return et;
+}
+
+Value *CodeGen::genVariant(const std::string &enumName, int tag,
+                           ArrayRef<Value *> payload) {
+  StructType *et = getEnumType(enumName);
+  // メモリ上に組み立ててから値としてロードする (タグ付き共用体)
+  AllocaInst *slot = builder_.CreateAlloca(et);
+  slot->setAlignment(Align(8));
+  // tag を格納
+  Value *tagPtr = builder_.CreateStructGEP(et, slot, 0, "tagptr");
+  builder_.CreateStore(ConstantInt::get(llvm::Type::getInt64Ty(ctx_), tag),
+                       tagPtr);
+  // payload を格納 (バリアントの構造体型として書き込む)
+  if (!payload.empty()) {
+    std::vector<llvm::Type *> fts;
+    for (Value *p : payload)
+      fts.push_back(p->getType());
+    StructType *vs = StructType::get(ctx_, fts);
+    Value *payPtr = builder_.CreateStructGEP(et, slot, 1, "payptr");
+    Value *agg = UndefValue::get(vs);
+    for (unsigned i = 0; i < payload.size(); ++i)
+      agg = builder_.CreateInsertValue(agg, payload[i], {i});
+    builder_.CreateStore(agg, payPtr);
+  }
+  return builder_.CreateLoad(et, slot, "enumval");
 }
 
 Value *CodeGen::genExpr(const Expr *e) {
@@ -82,6 +134,8 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genTupleIndex(static_cast<const TupleIndexExpr *>(e));
   case Expr::Kind::Let:
     return genLet(static_cast<const LetExpr *>(e));
+  case Expr::Kind::Match:
+    return genMatch(static_cast<const MatchExpr *>(e));
   }
   return nullptr;
 }
@@ -135,6 +189,103 @@ Value *CodeGen::genLet(const LetExpr *e) {
   return b;
 }
 
+Value *CodeGen::genMatch(const MatchExpr *e) {
+  Value *scrut = genExpr(e->scrutinee.get());
+  StructType *et = cast<StructType>(scrut->getType());
+
+  // scrutinee をメモリに置き、tag と payload を読み出す
+  AllocaInst *slot = builder_.CreateAlloca(et);
+  slot->setAlignment(Align(8));
+  builder_.CreateStore(scrut, slot);
+  Value *tagPtr = builder_.CreateStructGEP(et, slot, 0, "tagptr");
+  Value *tag =
+      builder_.CreateLoad(llvm::Type::getInt64Ty(ctx_), tagPtr, "tag");
+
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock *mergeBB = BasicBlock::Create(ctx_, "matchcont");
+
+  // 各アームのブロックを作る (wildcard は switch の default)
+  std::vector<BasicBlock *> armBBs;
+  BasicBlock *defaultBB = nullptr;
+  for (auto &arm : e->arms) {
+    BasicBlock *bb =
+        BasicBlock::Create(ctx_, arm.isWildcard ? "wild" : "arm", fn);
+    armBBs.push_back(bb);
+    if (arm.isWildcard)
+      defaultBB = bb;
+  }
+  BasicBlock *unreachBB = nullptr;
+  if (!defaultBB)
+    unreachBB = BasicBlock::Create(ctx_, "unreach", fn);
+
+  SwitchInst *sw = builder_.CreateSwitch(
+      tag, defaultBB ? defaultBB : unreachBB, e->arms.size());
+  for (size_t i = 0; i < e->arms.size(); ++i)
+    if (!e->arms[i].isWildcard)
+      sw->addCase(
+          ConstantInt::get(llvm::Type::getInt64Ty(ctx_), e->arms[i].tag),
+          armBBs[i]);
+
+  bool isUnit = !e->type.isKnown() || e->type.isUnit();
+  std::vector<std::pair<Value *, BasicBlock *>> incoming;
+
+  for (size_t a = 0; a < e->arms.size(); ++a) {
+    const MatchArm &arm = e->arms[a];
+    builder_.SetInsertPoint(armBBs[a]);
+
+    // ペイロードを束縛 (退避して復元)
+    std::vector<std::string> boundNames;
+    std::vector<Value *> oldVals;
+    if (!arm.isWildcard && !arm.payloadTypes.empty()) {
+      std::vector<llvm::Type *> fts;
+      for (auto &pt : arm.payloadTypes)
+        fts.push_back(toLLVM(pt));
+      StructType *vs = StructType::get(ctx_, fts);
+      Value *payPtr = builder_.CreateStructGEP(et, slot, 1, "payptr");
+      Value *pv = builder_.CreateLoad(vs, payPtr, "payld");
+      for (size_t i = 0; i < arm.bindings.size(); ++i) {
+        if (arm.bindings[i] == "_")
+          continue;
+        Value *fv = builder_.CreateExtractValue(pv, {static_cast<unsigned>(i)});
+        boundNames.push_back(arm.bindings[i]);
+        oldVals.push_back(namedValues_.count(arm.bindings[i])
+                              ? namedValues_[arm.bindings[i]]
+                              : nullptr);
+        namedValues_[arm.bindings[i]] = fv;
+      }
+    }
+
+    Value *bv = genExpr(arm.body.get());
+
+    for (size_t i = 0; i < boundNames.size(); ++i) {
+      if (oldVals[i])
+        namedValues_[boundNames[i]] = oldVals[i];
+      else
+        namedValues_.erase(boundNames[i]);
+    }
+
+    BasicBlock *endBB = builder_.GetInsertBlock();
+    builder_.CreateBr(mergeBB);
+    if (!isUnit)
+      incoming.push_back({bv, endBB});
+  }
+
+  if (unreachBB) {
+    builder_.SetInsertPoint(unreachBB);
+    builder_.CreateUnreachable();
+  }
+
+  fn->insert(fn->end(), mergeBB);
+  builder_.SetInsertPoint(mergeBB);
+  if (isUnit)
+    return nullptr;
+  PHINode *phi =
+      builder_.CreatePHI(toLLVM(e->type), incoming.size(), "matchtmp");
+  for (auto &in : incoming)
+    phi->addIncoming(in.first, in.second);
+  return phi;
+}
+
 Value *CodeGen::genNumber(const NumberExpr *e) {
   if (e->isFloat)
     return ConstantFP::get(toLLVM(e->type), e->floatValue);
@@ -142,6 +293,8 @@ Value *CodeGen::genNumber(const NumberExpr *e) {
 }
 
 Value *CodeGen::genVariable(const VariableExpr *e) {
+  if (e->variantTag >= 0) // 引数なし enum バリアント
+    return genVariant(e->variantEnum, e->variantTag, {});
   return namedValues_[e->name];
 }
 
@@ -183,10 +336,12 @@ Value *CodeGen::genBinary(const BinaryExpr *e) {
 }
 
 Value *CodeGen::genCall(const CallExpr *e) {
-  Function *callee = module_->getFunction(e->callee);
   std::vector<Value *> args;
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
+  if (e->variantTag >= 0) // enum バリアント構築
+    return genVariant(e->variantEnum, e->variantTag, args);
+  Function *callee = module_->getFunction(e->callee);
   CallInst *call = builder_.CreateCall(callee, args);
   if (e->type.isUnit())
     return nullptr;
@@ -339,10 +494,13 @@ bool CodeGen::genFunction(const FunctionDef &f) {
 
 std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   module_ = std::make_unique<Module>("kal", ctx_);
+  module_->setDataLayout(dl_); // enum レイアウトのサイズ計算に必要
 
-  // 構造体定義を登録 (toLLVM が名前から型を引けるように)
+  // 型定義を登録 (toLLVM が名前から型を引けるように)
   for (auto &sd : program.structs)
     structDefs_[sd->name] = sd.get();
+  for (auto &ed : program.enums)
+    enumDefs_[ed->name] = ed.get();
 
   // (1) 全プロトタイプを宣言 (前方参照・相互再帰に対応)
   for (auto &ex : program.externs)

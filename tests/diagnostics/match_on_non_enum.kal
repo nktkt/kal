@@ -1,0 +1,2 @@
+# match requires an enum; the scrutinee here is an integer.
+match 5 { _ => 0 };

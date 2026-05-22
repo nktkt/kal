@@ -26,6 +26,7 @@ struct Expr {
     TupleLit,
     TupleIndex,
     Let,
+    Match,
   };
   Kind kind;
   Span span;
@@ -101,8 +102,32 @@ struct LetExpr : Expr {
         body(std::move(body)) {}
 };
 
+/// match の 1 アーム:  `Variant(b1, b2) => body`  または  `_ => body`
+struct MatchArm {
+  bool isWildcard = false;
+  std::string variant;               // バリアント名 (wildcard 以外)
+  Span variantSpan;
+  std::vector<std::string> bindings; // ペイロード束縛名 ("_" 可)
+  std::vector<Span> bindingSpans;
+  ExprPtr body;
+  // Sema が解決:
+  int tag = -1;
+  std::vector<Type> payloadTypes;
+};
+
+/// パターンマッチ: `match scrutinee { arm, arm, ... }`
+struct MatchExpr : Expr {
+  ExprPtr scrutinee;
+  std::vector<MatchArm> arms;
+  MatchExpr(Span s, ExprPtr scrutinee)
+      : Expr(Kind::Match, s), scrutinee(std::move(scrutinee)) {}
+};
+
 struct VariableExpr : Expr {
   std::string name;
+  // Sema が、これが引数なしの enum バリアントなら設定する
+  int variantTag = -1;
+  std::string variantEnum;
   VariableExpr(Span s, std::string n)
       : Expr(Kind::Variable, s), name(std::move(n)) {}
 };
@@ -120,6 +145,9 @@ struct CallExpr : Expr {
   std::string callee;
   Span calleeSpan;
   std::vector<ExprPtr> args;
+  // Sema が、これが enum バリアント構築なら設定する
+  int variantTag = -1;
+  std::string variantEnum;
   CallExpr(Span s, std::string callee, Span calleeSpan,
            std::vector<ExprPtr> args)
       : Expr(Kind::Call, s), callee(std::move(callee)), calleeSpan(calleeSpan),
@@ -174,9 +202,25 @@ struct StructDef {
   Span span;
 };
 
+/// enum の 1 バリアント: `Name` または `Name(T, ...)`
+struct EnumVariant {
+  std::string name;
+  Span span;
+  std::vector<Type> payloadTypes;
+};
+
+/// enum 定義 (Rust 流 ADT): `enum Name { V1, V2(T, ...), ... }`
+struct EnumDef {
+  std::string name;
+  Span nameSpan;
+  std::vector<EnumVariant> variants;
+  Span span;
+};
+
 /// 1 つのソースをパースした結果。
 struct Program {
   std::vector<std::unique_ptr<StructDef>> structs;
+  std::vector<std::unique_ptr<EnumDef>> enums;
   std::vector<std::unique_ptr<Prototype>> externs;
   std::vector<std::unique_ptr<FunctionDef>> functions;
   std::vector<ExprPtr> topExprs;

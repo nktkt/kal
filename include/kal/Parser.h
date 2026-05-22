@@ -31,6 +31,7 @@ private:
   ExprPtr parseIfExpr();
   ExprPtr parseForExpr();
   ExprPtr parseLetExpr();
+  ExprPtr parseMatchExpr();
 
   bool parseType(Type &out); // 型を 1 つ読む (組み込み型/struct名/タプル)
 
@@ -38,10 +39,14 @@ private:
   std::unique_ptr<FunctionDef> parseDefinition();
   std::unique_ptr<Prototype> parseExtern();
   std::unique_ptr<StructDef> parseStructDef();
+  std::unique_ptr<EnumDef> parseEnumDef();
 
   Lexer &lexer_;
   DiagnosticEngine &diag_;
   Token cur_;
+  // match の対象などで、識別子直後の '{' を構造体リテラルと解釈しない
+  // (`match s { ... }` の '{' を奪わないため)。括弧/引数の中では解除する。
+  bool noStructLit_ = false;
 };
 
 } // namespace kal

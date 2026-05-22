@@ -16,6 +16,7 @@ std::string Type::str() const {
   case Kind::Float:
     return "f" + std::to_string(bits);
   case Kind::Struct:
+  case Kind::Enum:
     return name;
   case Kind::Tuple: {
     std::string s = "(";
