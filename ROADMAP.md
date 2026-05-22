@@ -1,0 +1,178 @@
+# Kal Roadmap — from a JIT toy to a scalable systems language
+
+> Status: living document. Horizons are relative and assume a small team; they
+> describe **order and dependencies**, not committed dates.
+
+## 1. Vision
+
+Kal aims to become a **general-purpose, ahead-of-time compiled systems
+language** with **ownership-and-borrowing** memory management (no GC), in the
+spirit of Rust / Zig — built on LLVM.
+
+The headline promise: **memory safety and high performance without a garbage
+collector**, with a toolchain that scales from a one-file script to a
+million-line codebase.
+
+### What "scalable product" means here
+
+We track scalability on four explicit axes, and every phase must defend them:
+
+| Axis | Question | Levers |
+|------|----------|--------|
+| **Code scale** | Does a 1M-line program compile in reasonable time? | Incremental + parallel compilation, modular IR, query-based compiler |
+| **Performance scale** | Is generated code competitive with C? | Monomorphization, LLVM opt pipeline, zero-cost abstractions |
+| **Team scale** | Can many contributors work without breaking things? | Layered architecture, golden tests, CI, RFC process |
+| **User scale** | Can outsiders adopt it productively? | Package manager, LSP, docs, registry, cross-platform binaries |
+
+## 2. Design principles
+
+1. **Errors are a feature.** Diagnostics with spans, codes, and fix-it hints from day one (rustc-quality is the bar).
+2. **Layered IRs.** `AST → HIR (typed) → MIR (CFG) → LLVM IR`. Each layer has one job.
+3. **No undefined behavior in safe code.** `unsafe` is an explicit, auditable escape hatch.
+4. **Zero-cost abstractions.** Generics monomorphize; ownership is compile-time only.
+5. **Tooling is part of the language.** Formatter, LSP, test runner, and package manager are first-class, not afterthoughts.
+6. **Test everything, always.** Every phase ships with golden/snapshot tests and CI green.
+
+### Non-goals (at least through v1.0)
+- A garbage collector (ownership is the model).
+- Full C++ template-level metaprogramming.
+- Source/ABI stability *before* v1.0 (we will break things deliberately to get the design right).
+
+## 3. Target architecture (what we are refactoring toward)
+
+```
+ source files (*.kal)
+   → [Lexer]          tokens + byte spans
+   → [Parser]         AST
+   → [Resolver]       modules, name resolution        → resolved AST
+   → [Type checker]   inference + checking             → HIR (typed)
+   → [MIR lowering]   desugar to control-flow graph    → MIR
+   → [Borrow checker] ownership / lifetimes on MIR
+   → [Codegen]        MIR → LLVM IR
+   → [LLVM]           optimize + emit object files
+   → [Linker]         native executable / library
+```
+
+The current v0.1 collapses *all* of this into one pass in `src/kal.cpp`. Phase 0
+breaks it apart — that refactor *is* the foundation for everything else.
+
+---
+
+## 4. Phased roadmap
+
+Effort key: **S** ≤1 mo · **M** 1–3 mo · **L** 3–6 mo · **XL** 6 mo+ (small team).
+
+### Horizon A — Foundations (near term)
+
+#### Phase 0 — Compiler re-architecture · **L** · → v0.2
+The single-pass design cannot scale to a real language. Rebuild the skeleton.
+- Source manager: multi-file input, byte spans, line/column mapping.
+- **Diagnostics engine**: errors/warnings with spans, severity, error codes, colored output, and `--error-format=json` for tools.
+- Split into modules/libraries: `lexer`, `parser`, `ast`, `diagnostics`, `driver`.
+- Real **AST** decoupled from codegen (no more `codegen()` on parse nodes).
+- **Test infrastructure**: golden tests for lexer/parser/diagnostics + `examples/` run as integration tests.
+- **CI** (GitHub Actions): build + test on Linux/macOS, every PR.
+- *Exit:* current v0.1 features work on the new pipeline, fully tested, CI green.
+
+#### Phase 1 — Static type system (monomorphic core) · **L** · → v0.3
+- Primitive types: `i8…i64`, `u8…u64`, `f32`, `f64`, `bool`, `char`, `()` (unit).
+- Typed function signatures; **local type inference** (bidirectional / HM-lite).
+- HIR layer with full type information; type errors via the diagnostics engine.
+- Replace the "everything is a double" model.
+- *Exit:* programs are type-checked; mismatches produce precise errors.
+
+### Horizon B — A real language (mid term)
+
+#### Phase 2 — Aggregates, pattern matching & AOT · **L** · → v0.4
+- `struct`, `enum` (algebraic data types), tuples, fixed arrays, slices.
+- `match` with exhaustiveness checking.
+- **AOT compilation**: emit object files, drive the system linker, produce executables (`kalc build`, `kalc run`).
+- Wire up the **LLVM optimization pipeline** (`PassBuilder`: mem2reg, instcombine, GVN, inlining).
+- *Exit:* compile multi-module programs to standalone native binaries.
+
+#### Phase 3 — Ownership & borrow checking · **XL** · → v0.5 *(the differentiator)*
+- Move semantics; `Copy` vs move; affine types.
+- References `&T` / `&mut T`; aliasing rules.
+- **Borrow checker** on MIR; start with NLL-style (non-lexical) regions.
+- `Drop` / RAII / deterministic destruction.
+- `unsafe` blocks with documented invariants.
+- *Exit:* memory-safe **without GC**; use-after-move, double-free, and aliasing violations are compile errors.
+
+#### Phase 4 — Generics & traits · **L** · → v0.6
+- Generic functions and types via **monomorphization**.
+- **Traits** (interfaces / typeclasses) with bounds; associated types.
+- Static dispatch by default; trait objects (dynamic dispatch) where needed.
+- *Exit:* write reusable generic data structures (`Vec<T>`, `Map<K,V>`).
+
+#### Phase 5 — Standard library & error handling · **L** · → v0.7
+- Heap primitives: allocator interface, `Box<T>`, `Vec<T>`, `String`, `HashMap`.
+- `Option<T>` / `Result<T,E>` and the `?` operator.
+- Iterators and closures.
+- IO, filesystem, process, time; `core` (no_std) / `std` split.
+- *Exit:* nontrivial real programs without external dependencies.
+
+### Horizon C — Product & ecosystem (long term)
+
+#### Phase 6 — Tooling & developer experience · **XL** · → v0.8
+- **Package manager + build tool**: manifest, semver dependency resolution, lockfile.
+- **Formatter** (`kalfmt`) and linter.
+- **Language Server (LSP)**: completion, go-to-definition, inline diagnostics, rename — the single biggest adoption lever.
+- Test runner (`kalc test`); doc generator (`kalc doc`).
+- **Debug info (DWARF)** for gdb/lldb.
+- *Exit:* install Kal → scaffold a project → build/test/format with full IDE support.
+
+#### Phase 7 — Scale & production hardening · **XL** · → v0.9
+- **Incremental compilation** (query-based / salsa-style) — fast rebuilds on large codebases.
+- **Parallel compilation** across modules.
+- **Cross-compilation** and multiple targets, including **WebAssembly**.
+- Concurrency model: threads, channels, and a design decision on `async`.
+- **C FFI** for interop; ABI considerations.
+- Benchmark suite + performance regression tracking in CI.
+- *Exit:* large codebases build fast and run on Linux/macOS/Windows/wasm.
+
+#### Phase 8 — Stability, community & v1.0 · **XL** · → **v1.0**
+- **Language specification** + **RFC process** for changes.
+- Semantic-versioning policy, stability guarantees, an **edition** mechanism for opt-in breaking changes.
+- **Package registry** (a crates.io-style index) and a **web playground** (compile to wasm in the browser).
+- Documentation site and a "Kal Book".
+- **Self-hosting**: bootstrap the Kal compiler in Kal — the ultimate maturity signal.
+- Governance model, `CONTRIBUTING`, `SECURITY`, code of conduct.
+- *Exit:* **v1.0** — stable, specified, documented, community-driven.
+
+---
+
+## 5. Cross-cutting tracks (run in every phase)
+
+- **Quality:** golden tests, fuzzing the parser/type-checker, CI gating every merge.
+- **Performance:** a benchmark suite from Phase 2; watch both *compile time* and *runtime*.
+- **Security:** the compiler is a trusted component — fuzz it, and define a vulnerability disclosure policy by Phase 6.
+- **Docs:** keep the language reference in lockstep with features; never let docs lag a release.
+- **Sustainability:** decide early how the project is funded/maintained if it grows (sponsors, foundation).
+
+## 6. Release strategy
+
+- `v0.x` are **unstable**: we break syntax/semantics freely to reach the right design.
+- Each phase cuts a `v0.N` tag with release notes and migration guidance.
+- After v0.9, a **beta** period freezes the language for feedback, then **v1.0** ships the stability promise + editions.
+
+## 7. Risk register
+
+| Risk | Mitigation |
+|------|------------|
+| Borrow checker (Phase 3) is the hardest part and may stall | Time-box an NLL prototype; ship a usable subset before full lifetimes |
+| LLVM API churn across versions | Pin LLVM, isolate codegen behind a thin adapter, test in CI against the pinned version |
+| Scope creep delays a usable release | Each phase has a hard *exit criterion*; resist adding features mid-phase |
+| Solo bandwidth | Front-load tests + docs so contributors can join at any phase |
+| No adoption | Prioritize the LSP and package manager (Phase 6) — DX drives uptake |
+
+## 8. Immediate next steps (start of Phase 0)
+
+1. Add a **diagnostics module** (spans + pretty errors) and route all current parse errors through it.
+2. Introduce a **source manager** and attach spans to every token and AST node.
+3. Split `src/kal.cpp` into `lexer` / `parser` / `ast` / `codegen` / `driver` units.
+4. Add **golden tests** + a **GitHub Actions CI** workflow (build + run `examples/`).
+5. Decide the **surface syntax** (the chosen `fn name(x: T) -> U` style) and lock a grammar sketch in `docs/`.
+
+> The fastest credible milestone: **Phase 0 + Phase 1** turns Kal from a
+> calculator into a typed language on a real compiler architecture. Everything
+> after that compounds on that foundation.

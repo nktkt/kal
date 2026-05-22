@@ -112,13 +112,15 @@ kal/
 
 ---
 
-## 拡張ロードマップ（次に作ると面白い順）
+## ロードマップ
 
-1. **`==` `!=` `<=` `>=` 演算子** … `g_binopPrec` と `BinaryExprAST::codegen` に追加するだけ
-2. **ローカル変数 `var x = e in body`** … `alloca` + `load`/`store`（Kaleidoscope 第7章）
-3. **代入演算子 `=`** … 変数を可変にする（mutable variables）
-4. **ユーザー定義演算子** … `def binary| 5 (a b) ...`（Kaleidoscope 第6章）
-5. **最適化パスの追加** … `PassBuilder` で `mem2reg`/`instcombine`/`reassociate` を有効化
-6. **整数型・文字列型** … 型システムの導入（double 一択からの脱却）
-7. **AOT コンパイル** … IR をオブジェクトファイルに出力して `clang` でリンク → 単体実行ファイル化
-8. **デバッグ情報 (DWARF)** … `DIBuilder` で行番号を埋め、`lldb` でステップ実行
+Kal v0.1 は今は JIT 電卓ですが、目標はもっと大きく――**所有権ベースのメモリ管理
+（GCなし）を持つ、AOT コンパイルの汎用システム言語**（Rust / Zig 系、LLVM ベース）
+を目指します。
+
+コンパイラの再設計・型システム・借用チェッカ・ジェネリクス・標準ライブラリ・
+ツールチェーン（LSP / パッケージマネージャ）・v1.0 までの全工程は
+**[ROADMAP.md](ROADMAP.md)**（英語）にまとめています。
+
+今すぐ着手するなら: パースエラーを診断モジュール経由にする、ソース span を付与する、
+`src/kal.cpp` を lexer/parser/ast/codegen に分割する（Phase 0）あたりから。

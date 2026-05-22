@@ -118,16 +118,19 @@ kal/
 
 ---
 
-## Roadmap (fun things to add next)
+## Roadmap
 
-1. **More comparison operators** `== != <= >=` — just extend the precedence map and `BinaryExprAST::codegen`
-2. **Local variables** `var x = e in body` — `alloca` + `load`/`store` (Kaleidoscope ch. 7)
-3. **Mutable variables / assignment** with `=`
-4. **User-defined operators** `def binary| 5 (a b) ...` (Kaleidoscope ch. 6)
-5. **Optimization passes** — enable `mem2reg` / `instcombine` / `reassociate` via `PassBuilder`
-6. **Integer & string types** — introduce a real type system
-7. **AOT compilation** — emit an object file and link with `clang` for a standalone binary
-8. **Debug info (DWARF)** — emit line tables with `DIBuilder` and step through in `lldb`
+Kal v0.1 is a JIT calculator today, but the goal is bigger: a **general-purpose,
+ahead-of-time compiled systems language with ownership-based memory management
+(no GC)** — in the spirit of Rust / Zig, built on LLVM.
+
+The full long-term plan — compiler re-architecture, type system, borrow checker,
+generics, standard library, tooling (LSP / package manager), and the path to
+v1.0 — lives in **[ROADMAP.md](ROADMAP.md)**.
+
+Good first steps if you want to hack on it now: route parse errors through a real
+diagnostics module, add source spans, and split `src/kal.cpp` into
+lexer/parser/ast/codegen units (Phase 0).
 
 ---
 
