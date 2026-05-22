@@ -8,6 +8,7 @@
 
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Verifier.h"
 
@@ -256,7 +257,7 @@ bool CodeGen::genFunction(const FunctionDef &f) {
   return true;
 }
 
-std::unique_ptr<Module> CodeGen::run(const Program &program) {
+std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   module_ = std::make_unique<Module>("kal", ctx_);
 
   // (1) 全プロトタイプを宣言 (前方参照・相互再帰に対応)
@@ -314,7 +315,70 @@ std::unique_ptr<Module> CodeGen::run(const Program &program) {
   builder_.CreateRetVoid();
   verifyFunction(*mainFn);
 
+  // C の main を生成 (AOT/JIT 共通。JIT は __main を直接呼ぶので未使用)
+  emitCMain();
+
+  // AOT 用: ランタイム関数の本体を生成して自己完結させる
+  if (emitRuntime)
+    emitRuntimeDefs();
+
   if (diag_.numErrors() > 0)
     return nullptr;
   return std::move(module_);
+}
+
+void CodeGen::emitCMain() {
+  llvm::Type *i32 = llvm::Type::getInt32Ty(ctx_);
+  FunctionType *mainTy = FunctionType::get(i32, false);
+  Function *mainFn =
+      Function::Create(mainTy, Function::ExternalLinkage, "main", module_.get());
+  builder_.SetInsertPoint(BasicBlock::Create(ctx_, "entry", mainFn));
+  builder_.CreateCall(module_->getFunction("__main"), {});
+  builder_.CreateRet(ConstantInt::get(i32, 0));
+  verifyFunction(*mainFn);
+}
+
+void CodeGen::emitRuntimeDefs() {
+  llvm::Type *i32 = llvm::Type::getInt32Ty(ctx_);
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *f64 = llvm::Type::getDoubleTy(ctx_);
+  llvm::Type *ptr = PointerType::getUnqual(ctx_);
+
+  // libc: i32 printf(ptr, ...) と i32 putchar(i32)
+  auto printfFn = module_->getOrInsertFunction(
+      "printf", FunctionType::get(i32, {ptr}, /*vararg=*/true));
+  auto putcharFn =
+      module_->getOrInsertFunction("putchar", FunctionType::get(i32, {i32}, false));
+
+  auto body = [&](const char *name) -> Function * {
+    Function *fn = module_->getFunction(name);
+    builder_.SetInsertPoint(BasicBlock::Create(ctx_, "entry", fn));
+    return fn;
+  };
+
+  // printi(i64 x): printf("%lld\n", x)
+  {
+    Function *fn = body("printi");
+    Value *fmt = builder_.CreateGlobalString("%lld\n", "fmt_i");
+    builder_.CreateCall(printfFn, {fmt, fn->getArg(0)});
+    builder_.CreateRetVoid();
+    verifyFunction(*fn);
+  }
+  // printd(double x): printf("%g\n", x)
+  {
+    Function *fn = body("printd");
+    Value *fmt = builder_.CreateGlobalString("%g\n", "fmt_g");
+    builder_.CreateCall(printfFn, {fmt, fn->getArg(0)});
+    builder_.CreateRetVoid();
+    verifyFunction(*fn);
+    (void)f64;
+  }
+  // putchard(i64 x): putchar((i32)x)
+  {
+    Function *fn = body("putchard");
+    Value *c = builder_.CreateTrunc(fn->getArg(0), i32, "c");
+    builder_.CreateCall(putcharFn, {c});
+    builder_.CreateRetVoid();
+    verifyFunction(*fn);
+  }
 }

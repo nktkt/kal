@@ -23,5 +23,8 @@ if(NOT LLVM_ENABLE_RTTI)
 endif()
 
 # 必要な LLVM コンポーネントをリンク
-llvm_map_components_to_libnames(llvm_libs core orcjit native support)
+#   orcjit: JIT 実行 / passes: 最適化(PassBuilder) / codegen+target+mc: AOT出力
+#   native: ホストターゲット (CodeGen/AsmPrinter 等) を一括で取り込む
+llvm_map_components_to_libnames(llvm_libs
+  core orcjit native passes target codegen mc support)
 target_link_libraries(kalc PRIVATE ${llvm_libs})

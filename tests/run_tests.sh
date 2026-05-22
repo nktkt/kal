@@ -99,6 +99,35 @@ for src in examples/*.kal; do
   rm -f "$actual"
 done
 
+# --- AOT cases: examples/*.kal compiled to a native binary ------------------
+# `kalc build` must produce a standalone executable whose output matches the
+# same golden as the JIT run. (Skipped during --bless; reuses the JIT goldens.)
+if [ "$BLESS" -ne 1 ]; then
+  for src in examples/*.kal; do
+    base="$(basename "${src%.kal}")"
+    golden="$EXPECTED_DIR/$base.out"
+    bin="$(mktemp)"
+    actual="$(mktemp)"
+
+    if ! "$KALC" build "$src" -o "$bin" 2>/dev/null; then
+      echo "FAIL        $src (aot) (kalc build failed)"
+      FAIL=$((FAIL + 1))
+      rm -f "$bin" "$actual"
+      continue
+    fi
+    "$bin" >"$actual" 2>/dev/null
+    if [ -f "$golden" ] && diff -q "$golden" "$actual" >/dev/null; then
+      echo "PASS        $src (aot)"
+      PASS=$((PASS + 1))
+    else
+      echo "FAIL        $src (aot) (binary output differs from $golden)"
+      show_diff "$golden" "$actual"
+      FAIL=$((FAIL + 1))
+    fi
+    rm -f "$bin" "$actual"
+  done
+fi
+
 # --- DIAGNOSTIC cases: tests/diagnostics/*.kal -> stderr --------------------
 for src in "$DIAG_DIR"/*.kal; do
   base="$(basename "${src%.kal}")"

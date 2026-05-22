@@ -33,14 +33,26 @@ cmake --build build -j
 > 注: エディタが LLVM ヘッダ未検出の赤線を出すことがありますが、CMake 経由のビルド
 > （`-I$(llvm-config --includedir)` 付き）は通ります。
 
-## 実行
+## 実行・コンパイル
+
+`kalc` は JIT 実行も、単体ネイティブバイナリへの AOT コンパイルもできます:
 
 ```sh
-./build/kalc examples/fib.kal     # ファイルを実行
-./build/kalc < examples/fib.kal   # 標準入力から
-echo '1 + 2 * 3;' | ./build/kalc  # ワンライナー → 7
-./build/kalc --emit-ir examples/fib.kal   # 実行せず LLVM IR を表示
+./build/kalc run examples/fib.kal        # JIT コンパイルして実行 (既定)
+./build/kalc examples/fib.kal            # 同上 (run が既定コマンド)
+echo '1 + 2 * 3;' | ./build/kalc         # 標準入力から → 7
+
+./build/kalc build examples/fib.kal -o fib   # ネイティブ実行ファイルを生成
+./fib                                        # 単体で動く → 55 610 6765
+
+./build/kalc -O2 build examples/fib.kal -o fib   # 最適化つき (-O0〜-O3)
+./build/kalc emit-ir  examples/fib.kal       # 生成された LLVM IR を表示
+./build/kalc emit-obj examples/fib.kal -o fib.o   # オブジェクトファイル出力
 ```
+
+AOT バイナリは自己完結します（libc/libm のみリンク）。`kalc` がランタイム
+（`printi`/`printd`/`putchard`）と C の `main` をモジュールに生成し、LLVM の
+`PassBuilder` で最適化、ホストの `TargetMachine` でオブジェクト出力、`cc` でリンクします。
 
 トップレベルに書いた式は型に応じて**自動表示**されます（整数・浮動小数点・bool）。
 `()`（unit）型の式――ループや出力組み込み――は何も表示しません。

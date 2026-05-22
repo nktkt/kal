@@ -85,12 +85,21 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 
 ### Horizon B — A real language (mid term)
 
-#### Phase 2 — Aggregates, pattern matching & AOT · **L** · → v0.4
+#### Phase 2 — Aggregates, pattern matching & AOT · **L** · → v0.4 · 🟡 in progress
+
+**2a — AOT & optimization · ✅ done**
+- **AOT compilation**: `kalc build` emits an object file via the host
+  `TargetMachine` and links it with `cc` into a standalone native binary;
+  `kalc run` keeps the JIT path; `emit-obj` / `emit-ir` for intermediates. ✅
+- A self-contained runtime (`printi`/`printd`/`putchard`) and a C `main` are
+  emitted into the module for AOT builds. ✅
+- **LLVM optimization pipeline** via `PassBuilder` (`-O0`…`-O3`). ✅
+- CI builds each example AOT and checks the binary's output. ✅
+
+**2b — Aggregates & pattern matching** *(next)*
 - `struct`, `enum` (algebraic data types), tuples, fixed arrays, slices.
 - `match` with exhaustiveness checking.
-- **AOT compilation**: emit object files, drive the system linker, produce executables (`kalc build`, `kalc run`).
-- Wire up the **LLVM optimization pipeline** (`PassBuilder`: mem2reg, instcombine, GVN, inlining).
-- *Exit:* compile multi-module programs to standalone native binaries.
+- *Exit:* compile programs using user-defined data types to native binaries.
 
 #### Phase 3 — Ownership & borrow checking · **XL** · → v0.5 *(the differentiator)*
 - Move semantics; `Copy` vs move; affine types.

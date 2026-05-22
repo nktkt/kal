@@ -17,8 +17,11 @@ public:
   CodeGen(llvm::LLVMContext &ctx, DiagnosticEngine &diag);
 
   /// Program を LLVM モジュールに変換する。
+  /// emitRuntime=true なら自己完結バイナリ用に printi/printd/putchard の本体と
+  /// C の main を生成する (AOT 用)。false なら宣言のみ (JIT がホスト側で解決)。
   /// 失敗時は nullptr を返す (診断は diag に報告済み)。
-  std::unique_ptr<llvm::Module> run(const Program &program);
+  std::unique_ptr<llvm::Module> run(const Program &program,
+                                    bool emitRuntime = false);
 
 private:
   llvm::Type *toLLVM(const Type &t); // kal::Type → llvm::Type (unit は void)
@@ -34,6 +37,8 @@ private:
 
   llvm::Function *declareProto(const Prototype &p);
   bool genFunction(const FunctionDef &f);
+  void emitRuntimeDefs(); // printi/printd/putchard の本体 (libc 呼び出し)
+  void emitCMain();       // i32 main() { __main(); return 0; }
 
   llvm::LLVMContext &ctx_;
   DiagnosticEngine &diag_;

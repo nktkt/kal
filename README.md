@@ -39,14 +39,28 @@ This produces `build/kalc`.
 > Note: your editor may show red squiggles about missing LLVM headers. The
 > CMake build (which passes `-I$(llvm-config --includedir)`) compiles fine.
 
-## Run
+## Run & compile
+
+`kalc` can JIT-execute a program or compile it ahead-of-time to a standalone
+native binary:
 
 ```sh
-./build/kalc examples/fib.kal       # run a file
-./build/kalc < examples/fib.kal     # read from stdin
-echo '1 + 2 * 3;' | ./build/kalc    # one-liner → 7
-./build/kalc --emit-ir examples/fib.kal   # print the generated LLVM IR (no run)
+./build/kalc run examples/fib.kal        # JIT compile and execute (default)
+./build/kalc examples/fib.kal            # same — `run` is the default command
+echo '1 + 2 * 3;' | ./build/kalc         # read from stdin → 7
+
+./build/kalc build examples/fib.kal -o fib   # compile to a native executable
+./fib                                        # ...that runs on its own → 55 610 6765
+
+./build/kalc -O2 build examples/fib.kal -o fib   # with optimization (-O0..-O3)
+./build/kalc emit-ir  examples/fib.kal       # print the generated LLVM IR
+./build/kalc emit-obj examples/fib.kal -o fib.o   # write an object file
 ```
+
+AOT binaries are self-contained (they only link libc/libm): `kalc` emits the
+runtime (`printi`/`printd`/`putchard`) and a C `main` into the module, optimizes
+with LLVM's `PassBuilder`, emits an object file via the host `TargetMachine`, and
+links it with `cc`.
 
 Top-level expressions are **auto-printed** by type (integers, floats, bools).
 Expressions of type `()` (unit) — loops and the print built-ins — print nothing.
