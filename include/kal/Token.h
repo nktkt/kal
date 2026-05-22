@@ -30,8 +30,16 @@ enum class Tok {
   Minus,
   Star,
   Slash,
+  Percent,  // %
   Less,
   Greater,
+  Le,       // <=
+  Ge,       // >=
+  EqEq,     // ==
+  BangEq,   // !=
+  Bang,     // !
+  AmpAmp,   // &&
+  PipePipe, // ||
   Equal,
   Arrow,    // ->
   FatArrow, // =>

@@ -3,6 +3,12 @@
 All notable changes to Kal. Versions track [ROADMAP.md](ROADMAP.md) phases.
 Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
+## [Unreleased]
+
+- **Operators:** `==` `!=` `<=` `>=`, remainder `%`, unary `-` and `!`, and
+  short-circuiting `&&` / `||`. `==`/`!=` work on numbers and `bool`; logical
+  operators take `bool`. Float comparisons are now ordered.
+
 ## [v0.5.0-alpha] — 2026-05-23
 
 Phases 0–2 complete; Phase 3 (ownership) in progress. Kal is a small but real

@@ -79,12 +79,19 @@ There are **no implicit conversions** — convert explicitly with `as`.
 
 ### Operators (highest precedence first)
 
-| Operator | Meaning            | Precedence |
-|----------|--------------------|-----------|
-| `as`     | type cast          | (postfix) |
-| `*` `/`  | multiply / divide  | 40        |
-| `+` `-`  | add / subtract     | 20        |
-| `<` `>`  | comparison (→ bool)| 10        |
+| Operator | Meaning | Precedence |
+|----------|---------|-----------|
+| `-x` `!x` | unary negate / logical not | (prefix) |
+| `e as T` | type cast | (postfix) |
+| `*` `/` `%` | multiply / divide / remainder | 40 |
+| `+` `-` | add / subtract | 20 |
+| `< > <= >= == !=` | comparison & equality (→ bool) | 10 |
+| `&&` | logical and (short-circuit) | 6 |
+| `\|\|` | logical or (short-circuit) | 4 |
+| `place = value` | assignment (→ unit) | (lowest) |
+
+`==` / `!=` work on numbers and `bool`; the ordered comparisons and arithmetic
+are numeric-only; `&&` / `||` take `bool` and short-circuit.
 
 ### Functions and externs
 
@@ -230,7 +237,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

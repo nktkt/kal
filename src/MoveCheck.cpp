@@ -88,6 +88,9 @@ void MoveCheck::use(const Expr *e) {
   case Expr::Kind::Cast:
     use(static_cast<const CastExpr *>(e)->operand.get());
     return;
+  case Expr::Kind::Unary:
+    use(static_cast<const UnaryExpr *>(e)->operand.get());
+    return;
   case Expr::Kind::StructLit: {
     auto *s = static_cast<const StructLitExpr *>(e);
     for (auto &fv : s->fieldValues)

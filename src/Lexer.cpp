@@ -125,22 +125,53 @@ Token Lexer::next() {
     return make(Tok::Star);
   case '/':
     return make(Tok::Slash);
+  case '%':
+    return make(Tok::Percent);
   case '<':
+    if (pos_ < buf_.size() && buf_[pos_] == '=') {
+      ++pos_;
+      return make(Tok::Le); // <=
+    }
     return make(Tok::Less);
   case '>':
+    if (pos_ < buf_.size() && buf_[pos_] == '=') {
+      ++pos_;
+      return make(Tok::Ge); // >=
+    }
     return make(Tok::Greater);
   case '=':
     if (pos_ < buf_.size() && buf_[pos_] == '>') {
       ++pos_;
       return make(Tok::FatArrow); // =>
     }
+    if (pos_ < buf_.size() && buf_[pos_] == '=') {
+      ++pos_;
+      return make(Tok::EqEq); // ==
+    }
     return make(Tok::Equal);
+  case '!':
+    if (pos_ < buf_.size() && buf_[pos_] == '=') {
+      ++pos_;
+      return make(Tok::BangEq); // !=
+    }
+    return make(Tok::Bang);
   case ':':
     return make(Tok::Colon);
   case '.':
     return make(Tok::Dot);
   case '&':
+    if (pos_ < buf_.size() && buf_[pos_] == '&') {
+      ++pos_;
+      return make(Tok::AmpAmp); // &&
+    }
     return make(Tok::Amp);
+  case '|':
+    if (pos_ < buf_.size() && buf_[pos_] == '|') {
+      ++pos_;
+      return make(Tok::PipePipe); // ||
+    }
+    diag_.error({fileId_, start, pos_}, "E0001", "不明な文字 '|' です");
+    return next(); // 単独 '|' は読み飛ばす
   case '(':
     return make(Tok::LParen);
   case ')':

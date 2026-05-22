@@ -30,6 +30,7 @@ struct Expr {
     Deref,
     Block,
     Assign,
+    Unary,
   };
   Kind kind;
   Span span;
@@ -161,6 +162,14 @@ struct DerefExpr : Expr {
   ExprPtr operand;
   DerefExpr(Span s, ExprPtr operand)
       : Expr(Kind::Deref, s), operand(std::move(operand)) {}
+};
+
+/// 単項演算: `-operand` (Tok::Minus) または `!operand` (Tok::Bang)
+struct UnaryExpr : Expr {
+  Tok op;
+  ExprPtr operand;
+  UnaryExpr(Span s, Tok op, ExprPtr operand)
+      : Expr(Kind::Unary, s), op(op), operand(std::move(operand)) {}
 };
 
 struct VariableExpr : Expr {

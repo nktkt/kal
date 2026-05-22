@@ -8,14 +8,23 @@ using namespace kal;
 
 int kal::binPrecedence(Tok kind) {
   switch (kind) {
+  case Tok::PipePipe:
+    return 4;
+  case Tok::AmpAmp:
+    return 6;
   case Tok::Less:
   case Tok::Greater:
+  case Tok::Le:
+  case Tok::Ge:
+  case Tok::EqEq:
+  case Tok::BangEq:
     return 10;
   case Tok::Plus:
   case Tok::Minus:
     return 20;
   case Tok::Star:
   case Tok::Slash:
+  case Tok::Percent:
     return 40;
   default:
     return -1;
@@ -339,6 +348,16 @@ ExprPtr Parser::parseUnary() {
       return nullptr;
     Span full{s.fileId, s.start, operand->span.end};
     return std::make_unique<DerefExpr>(full, std::move(operand));
+  }
+  if (cur_.kind == Tok::Minus || cur_.kind == Tok::Bang) {
+    Tok op = cur_.kind;
+    Span s = cur_.span;
+    advance();
+    auto operand = parseUnary();
+    if (!operand)
+      return nullptr;
+    Span full{s.fileId, s.start, operand->span.end};
+    return std::make_unique<UnaryExpr>(full, op, std::move(operand));
   }
 
   auto e = parsePrimary();

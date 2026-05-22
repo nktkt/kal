@@ -181,6 +181,9 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
   case Expr::Kind::Assign:
     t = checkAssign(static_cast<AssignExpr *>(e));
     break;
+  case Expr::Kind::Unary:
+    t = checkUnary(static_cast<UnaryExpr *>(e), expected);
+    break;
   }
   e->type = t;
   return t;
@@ -220,19 +223,43 @@ Type Sema::checkVariable(VariableExpr *e) {
 }
 
 Type Sema::checkBinary(BinaryExpr *e, std::optional<Type> expected) {
-  bool isCompare = (e->op == Tok::Less || e->op == Tok::Greater);
+  Tok op = e->op;
+  bool isOrdCmp = op == Tok::Less || op == Tok::Greater || op == Tok::Le ||
+                  op == Tok::Ge;
+  bool isEq = op == Tok::EqEq || op == Tok::BangEq;
+  bool isLogical = op == Tok::AmpAmp || op == Tok::PipePipe;
+  bool isCompare = isOrdCmp || isEq;
+
+  // 論理 && / || : 両辺 bool、結果 bool
+  if (isLogical) {
+    Type lt = check(e->lhs.get(), Type::boolean());
+    Type rt = check(e->rhs.get(), Type::boolean());
+    if (lt.isKnown() && !lt.isBool())
+      diag_.error(e->lhs->span, "E0122",
+                  "論理演算には bool が必要です (実際 " + lt.str() + ")");
+    if (rt.isKnown() && !rt.isBool())
+      diag_.error(e->rhs->span, "E0122",
+                  "論理演算には bool が必要です (実際 " + rt.str() + ")");
+    return Type::boolean();
+  }
 
   // 比較なら期待型は両辺に伝えない (結果は bool のため)。
   std::optional<Type> lhsHint = isCompare ? std::nullopt : expected;
   Type lt = check(e->lhs.get(), lhsHint);
-  // 右辺は左辺の型に合わせる (リテラルの型を確定させる)。
   std::optional<Type> rhsHint =
       lt.isKnown() ? std::optional<Type>(lt) : std::nullopt;
   Type rt = check(e->rhs.get(), rhsHint);
 
-  if (lt.isKnown() && !lt.isNumeric()) {
-    diag_.error(e->lhs->span, "E0120", "数値型が必要です (実際 " + lt.str() + ")");
-    return Type::unknown();
+  // == / != は数値か bool に使える。順序比較・算術は数値のみ。
+  if (lt.isKnown()) {
+    bool ok = isEq ? (lt.isNumeric() || lt.isBool()) : lt.isNumeric();
+    if (!ok) {
+      diag_.error(e->lhs->span, "E0120",
+                  (isEq ? "== / != には数値か bool が必要です (実際 "
+                        : "数値型が必要です (実際 ") +
+                      lt.str() + ")");
+      return isCompare ? Type::boolean() : Type::unknown();
+    }
   }
   if (lt.isKnown() && rt.isKnown() && lt != rt) {
     diag_.error(e->span, "E0121",
@@ -241,6 +268,24 @@ Type Sema::checkBinary(BinaryExpr *e, std::optional<Type> expected) {
     return isCompare ? Type::boolean() : Type::unknown();
   }
   return isCompare ? Type::boolean() : lt;
+}
+
+Type Sema::checkUnary(UnaryExpr *e, std::optional<Type> expected) {
+  if (e->op == Tok::Bang) { // 論理否定
+    Type t = check(e->operand.get(), Type::boolean());
+    if (t.isKnown() && !t.isBool())
+      diag_.error(e->operand->span, "E0123",
+                  "! には bool が必要です (実際 " + t.str() + ")");
+    return Type::boolean();
+  }
+  // 単項マイナス
+  Type t = check(e->operand.get(), expected);
+  if (t.isKnown() && !t.isNumeric()) {
+    diag_.error(e->operand->span, "E0124",
+                "単項 - には数値型が必要です (実際 " + t.str() + ")");
+    return Type::unknown();
+  }
+  return t;
 }
 
 Type Sema::checkCall(CallExpr *e) {

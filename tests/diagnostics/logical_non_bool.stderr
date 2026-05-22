@@ -1,0 +1,11 @@
+error[E0122]: 論理演算には bool が必要です (実際 i32)
+ --> tests/diagnostics/logical_non_bool.kal:2:1
+  |
+2 | 1 && 2;
+  | ^
+error[E0122]: 論理演算には bool が必要です (実際 i32)
+ --> tests/diagnostics/logical_non_bool.kal:2:6
+  |
+2 | 1 && 2;
+  |      ^
+2 個のエラーで中断しました

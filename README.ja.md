@@ -72,10 +72,17 @@ AOT バイナリは自己完結します（libc/libm のみリンク）。`kalc`
 
 | 演算子 | 意味 | 優先度 |
 |---|---|---|
-| `as` | 型キャスト | （後置） |
-| `*` `/` | 乗除 | 40 |
+| `-x` `!x` | 単項マイナス / 論理否定 | （前置） |
+| `e as T` | 型キャスト | （後置） |
+| `*` `/` `%` | 乗除・剰余 | 40 |
 | `+` `-` | 加減 | 20 |
-| `<` `>` | 比較（結果は bool） | 10 |
+| `< > <= >= == !=` | 比較・等価（結果は bool） | 10 |
+| `&&` | 論理積（短絡） | 6 |
+| `\|\|` | 論理和（短絡） | 4 |
+| `place = value` | 代入（結果は unit） | （最弱） |
+
+`==` / `!=` は数値と `bool` に使用可。順序比較と算術は数値のみ。`&&` / `||` は
+`bool` を取り短絡評価します。
 
 ### 関数定義 / 外部宣言
 
@@ -218,7 +225,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

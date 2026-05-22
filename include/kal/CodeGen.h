@@ -32,6 +32,7 @@ private:
   llvm::Value *genNumber(const NumberExpr *e);
   llvm::Value *genVariable(const VariableExpr *e);
   llvm::Value *genBinary(const BinaryExpr *e);
+  llvm::Value *genUnary(const UnaryExpr *e);
   llvm::Value *genCall(const CallExpr *e);
   llvm::Value *genIf(const IfExpr *e);
   llvm::Value *genFor(const ForExpr *e);

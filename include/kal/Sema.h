@@ -36,6 +36,7 @@ private:
   Type checkNumber(NumberExpr *e, std::optional<Type> expected);
   Type checkVariable(VariableExpr *e);
   Type checkBinary(BinaryExpr *e, std::optional<Type> expected);
+  Type checkUnary(UnaryExpr *e, std::optional<Type> expected);
   Type checkCall(CallExpr *e);
   Type checkIf(IfExpr *e, std::optional<Type> expected);
   Type checkFor(ForExpr *e);

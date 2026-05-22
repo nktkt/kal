@@ -144,6 +144,8 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genBorrow(static_cast<const BorrowExpr *>(e));
   case Expr::Kind::Deref:
     return genDeref(static_cast<const DerefExpr *>(e));
+  case Expr::Kind::Unary:
+    return genUnary(static_cast<const UnaryExpr *>(e));
   }
   return nullptr;
 }
@@ -388,6 +390,31 @@ Value *CodeGen::genDeref(const DerefExpr *e) {
 }
 
 Value *CodeGen::genBinary(const BinaryExpr *e) {
+  // 短絡論理: 右辺を条件付きで評価する
+  if (e->op == Tok::AmpAmp || e->op == Tok::PipePipe) {
+    bool isAnd = e->op == Tok::AmpAmp;
+    Value *l = genExpr(e->lhs.get()); // i1
+    Function *fn = builder_.GetInsertBlock()->getParent();
+    BasicBlock *rhsBB = BasicBlock::Create(ctx_, "scrhs", fn);
+    BasicBlock *contBB = BasicBlock::Create(ctx_, "sccont", fn);
+    BasicBlock *lBB = builder_.GetInsertBlock();
+    // &&: l が真なら rhs を、偽なら cont(=false)。|| はその逆。
+    if (isAnd)
+      builder_.CreateCondBr(l, rhsBB, contBB);
+    else
+      builder_.CreateCondBr(l, contBB, rhsBB);
+    builder_.SetInsertPoint(rhsBB);
+    Value *r = genExpr(e->rhs.get());
+    BasicBlock *rEnd = builder_.GetInsertBlock();
+    builder_.CreateBr(contBB);
+    builder_.SetInsertPoint(contBB);
+    PHINode *phi = builder_.CreatePHI(llvm::Type::getInt1Ty(ctx_), 2, "sctmp");
+    // l からの到達時の値: && なら false、|| なら true
+    phi->addIncoming(builder_.getInt1(!isAnd), lBB);
+    phi->addIncoming(r, rEnd);
+    return phi;
+  }
+
   Value *l = genExpr(e->lhs.get());
   Value *r = genExpr(e->rhs.get());
   const kal::Type &ot = e->lhs->type; // 両辺は同じ型 (Sema 保証)
@@ -409,19 +436,49 @@ Value *CodeGen::genBinary(const BinaryExpr *e) {
       return builder_.CreateFDiv(l, r, "divtmp");
     return sgn ? builder_.CreateSDiv(l, r, "divtmp")
                : builder_.CreateUDiv(l, r, "divtmp");
+  case Tok::Percent:
+    if (isF)
+      return builder_.CreateFRem(l, r, "remtmp");
+    return sgn ? builder_.CreateSRem(l, r, "remtmp")
+               : builder_.CreateURem(l, r, "remtmp");
   case Tok::Less:
     if (isF)
-      return builder_.CreateFCmpULT(l, r, "cmptmp");
+      return builder_.CreateFCmpOLT(l, r, "cmptmp");
     return sgn ? builder_.CreateICmpSLT(l, r, "cmptmp")
                : builder_.CreateICmpULT(l, r, "cmptmp");
   case Tok::Greater:
     if (isF)
-      return builder_.CreateFCmpUGT(l, r, "cmptmp");
+      return builder_.CreateFCmpOGT(l, r, "cmptmp");
     return sgn ? builder_.CreateICmpSGT(l, r, "cmptmp")
                : builder_.CreateICmpUGT(l, r, "cmptmp");
+  case Tok::Le:
+    if (isF)
+      return builder_.CreateFCmpOLE(l, r, "cmptmp");
+    return sgn ? builder_.CreateICmpSLE(l, r, "cmptmp")
+               : builder_.CreateICmpULE(l, r, "cmptmp");
+  case Tok::Ge:
+    if (isF)
+      return builder_.CreateFCmpOGE(l, r, "cmptmp");
+    return sgn ? builder_.CreateICmpSGE(l, r, "cmptmp")
+               : builder_.CreateICmpUGE(l, r, "cmptmp");
+  case Tok::EqEq:
+    return isF ? builder_.CreateFCmpOEQ(l, r, "cmptmp")
+               : builder_.CreateICmpEQ(l, r, "cmptmp");
+  case Tok::BangEq:
+    return isF ? builder_.CreateFCmpONE(l, r, "cmptmp")
+               : builder_.CreateICmpNE(l, r, "cmptmp");
   default:
     return nullptr;
   }
+}
+
+Value *CodeGen::genUnary(const UnaryExpr *e) {
+  Value *v = genExpr(e->operand.get());
+  if (e->op == Tok::Bang)
+    return builder_.CreateNot(v, "nottmp"); // bool (i1) 反転
+  // 単項マイナス
+  return e->operand->type.isFloat() ? builder_.CreateFNeg(v, "negtmp")
+                                    : builder_.CreateNeg(v, "negtmp");
 }
 
 Value *CodeGen::genCall(const CallExpr *e) {
