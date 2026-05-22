@@ -6,7 +6,7 @@ Kal は LLVM をバックエンドにした「電卓・式言語」(Kaleidoscope
 ソースを **LLVM IR** にコンパイルし、**ORC JIT** でその場実行します。
 
 ```
-ソース → [Lexer] → トークン → [Parser] → AST → [Sema] → 型付きAST → [CodeGen] → LLVM IR → [ORC JIT] → 実行
+ソース → [Lexer] → [Parser] → AST → [Sema] → 型付きAST → [MoveCheck] → [CodeGen] → LLVM IR → [ORC JIT] / ネイティブバイナリ
 ```
 
 **静的型付き**（`i8`〜`i64`・`u8`〜`u64`・`f32`・`f64`・`bool`）で、型検査器が
@@ -173,8 +173,25 @@ fn incr(p: &mut i64) = { *p = *p + 1; };   # &mut 経由で変更
 `&x` / `&mut x` は場所（変数・フィールド等）を参照として借用し、`*p` で参照外し、
 `*p = e` で `&mut` 経由の書き込みをします。ローカルはメモリ常駐（アドレスを取れる）で、
 `-O` で再びレジスタへ昇格します。可変性は検査されます（非 `mut` への代入や `&mut` 借用は
-エラー）。本格的な借用チェック（ムーブ意味論・エイリアス規則・ライフタイム）は Phase 3 の
-残り（[ROADMAP.md](ROADMAP.md)）。参照のエイリアス検査はまだです。
+エラー）。
+
+### ムーブ意味論
+
+非 `Copy` 型（`struct`・`enum`・タプル・`&mut T`）は値の受け渡し・束縛で**ムーブ**され、
+元の変数は使えなくなります。`Copy` 型（数値・`bool`・`&T`）はコピーされ、借用 `&x` は
+ムーブしません。
+
+```
+struct Buf { n: i64 }
+fn consume(b: Buf) -> i64 = b.n;
+
+{ let a = Buf { n: 7 }; let b = a; consume(b) };   # OK: a を b にムーブ後、b を使用
+# { let a = Buf { n: 7 }; let b = a; consume(a) }  # エラー: ムーブ済みの a を使用
+```
+
+ムーブ後の使用はコンパイルエラー（直線コード・`if`/`match` の分岐・ループ本体で検査）。
+エイリアス/ライフタイム検査（`&mut` は排他・`&` は複数可・ダングリング防止）は Phase 3 の
+残作業です（[ROADMAP.md](ROADMAP.md)）。
 
 ### 組み込み関数
 - `printi(x: i64)` … 整数を 1 行で表示
@@ -198,9 +215,10 @@ kal/
 │   ├── Type.h               #   型システム
 │   ├── AST.h    Parser.h    #   codegen を持たない AST + 構文解析
 │   ├── Sema.h               #   型検査 (AST に型を注釈)
+│   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

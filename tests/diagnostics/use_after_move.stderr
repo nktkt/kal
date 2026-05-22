@@ -1,0 +1,6 @@
+error[E0180]: ムーブ済みの値を使用しています
+ --> tests/diagnostics/use_after_move.kal:4:55
+  |
+4 | fn f() -> i64 = { let p = P { x: 1 }; let q = p; use2(p, q) };
+  |                                                       ^
+1 個のエラーで中断しました

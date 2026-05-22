@@ -9,7 +9,7 @@ Kal is a minimal "calculator / expression" language (in the spirit of LLVM's
 on the fly with an **ORC JIT**.
 
 ```
-source → [Lexer] → tokens → [Parser] → AST → [Sema] → typed AST → [CodeGen] → LLVM IR → [ORC JIT] → run
+source → [Lexer] → [Parser] → AST → [Sema] → typed AST → [MoveCheck] → [CodeGen] → LLVM IR → [ORC JIT] / native binary
 ```
 
 It is **statically typed** (`i8`…`i64`, `u8`…`u64`, `f32`, `f64`, `bool`) with a
@@ -184,9 +184,26 @@ fn incr(p: &mut i64) = { *p = *p + 1; };   # mutate through &mut
 dereferences and `*p = e` writes through a `&mut`. Locals are memory-backed so
 they're addressable (`-O` promotes
 them back to registers). Mutability is checked (assigning to a non-`mut` binding,
-or `&mut` of one, is an error). The full borrow checker — move semantics,
-aliasing rules, and lifetimes — is the rest of Phase 3
-([ROADMAP.md](ROADMAP.md)); references are not yet aliasing-checked.
+or `&mut` of one, is an error).
+
+### Move semantics
+
+Non-`Copy` values (`struct`, `enum`, tuples, `&mut T`) are **moved** when passed
+or bound by value; the source is then unusable. `Copy` types (numbers, `bool`,
+`&T`) are copied instead, and borrowing (`&x`) never moves.
+
+```
+struct Buf { n: i64 }
+fn consume(b: Buf) -> i64 = b.n;
+
+{ let a = Buf { n: 7 }; let b = a; consume(b) };   # ok: a moved into b, then b used
+# { let a = Buf { n: 7 }; let b = a; consume(a) }  # error: use of moved value `a`
+```
+
+Use-after-move is a compile error (checked in straight-line code, across
+`if`/`match` branches, and for loop bodies). Aliasing/lifetime checking (one
+`&mut` xor many `&`, no dangling) is the remaining Phase 3 work
+([ROADMAP.md](ROADMAP.md)).
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
@@ -210,9 +227,10 @@ kal/
 │   ├── Type.h               #   the type system
 │   ├── AST.h    Parser.h    #   codegen-free AST + parser
 │   ├── Sema.h               #   type checker (annotates the AST)
+│   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

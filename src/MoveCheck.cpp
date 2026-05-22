@@ -1,0 +1,228 @@
+//===- MoveCheck.cpp -------------------------------------------------------===//
+#include "kal/MoveCheck.h"
+
+#include "kal/Diagnostic.h"
+
+using namespace kal;
+
+MoveCheck::MoveCheck(DiagnosticEngine &diag) : diag_(diag) {}
+
+bool MoveCheck::isCopy(const Type &t) const {
+  switch (t.kind) {
+  case Type::Kind::Int:
+  case Type::Kind::Float:
+  case Type::Kind::Bool:
+  case Type::Kind::Unit:
+  case Type::Kind::Unknown: // エラー型は誤検出を避けてコピー扱い
+    return true;
+  case Type::Kind::Ref:
+    return !t.refMut; // &T はコピー、&mut T はムーブ
+  default:
+    return false; // Struct / Enum / Tuple
+  }
+}
+
+void MoveCheck::moveVar(const std::string &name, Span span) {
+  auto it = moved_.find(name);
+  if (it != moved_.end()) {
+    diag_.error(span, "E0180", "ムーブ済みの値を使用しています");
+    return;
+  }
+  moved_[name] = span;
+}
+
+void MoveCheck::requireLive(const Expr *e) {
+  switch (e->kind) {
+  case Expr::Kind::Variable: {
+    auto *v = static_cast<const VariableExpr *>(e);
+    if (v->variantTag < 0 && moved_.count(v->name))
+      diag_.error(e->span, "E0182", "ムーブ済みの値を参照しています");
+    return;
+  }
+  case Expr::Kind::Field:
+    requireLive(static_cast<const FieldExpr *>(e)->operand.get());
+    return;
+  case Expr::Kind::TupleIndex:
+    requireLive(static_cast<const TupleIndexExpr *>(e)->operand.get());
+    return;
+  case Expr::Kind::Deref:
+    requireLive(static_cast<const DerefExpr *>(e)->operand.get());
+    return;
+  case Expr::Kind::Borrow:
+    requireLive(static_cast<const BorrowExpr *>(e)->operand.get());
+    return;
+  default:
+    use(e); // 一時値など
+    return;
+  }
+}
+
+void MoveCheck::use(const Expr *e) {
+  switch (e->kind) {
+  case Expr::Kind::Number:
+    return;
+  case Expr::Kind::Variable: {
+    auto *v = static_cast<const VariableExpr *>(e);
+    if (v->variantTag >= 0)
+      return; // 引数なしバリアント構築
+    if (isCopy(e->type)) {
+      if (moved_.count(v->name))
+        diag_.error(e->span, "E0180", "ムーブ済みの値を使用しています");
+    } else {
+      moveVar(v->name, e->span);
+    }
+    return;
+  }
+  case Expr::Kind::Binary: {
+    auto *b = static_cast<const BinaryExpr *>(e);
+    use(b->lhs.get());
+    use(b->rhs.get());
+    return;
+  }
+  case Expr::Kind::Call: {
+    auto *c = static_cast<const CallExpr *>(e);
+    for (auto &a : c->args)
+      use(a.get());
+    return;
+  }
+  case Expr::Kind::Cast:
+    use(static_cast<const CastExpr *>(e)->operand.get());
+    return;
+  case Expr::Kind::StructLit: {
+    auto *s = static_cast<const StructLitExpr *>(e);
+    for (auto &fv : s->fieldValues)
+      use(fv.get());
+    return;
+  }
+  case Expr::Kind::TupleLit: {
+    auto *t = static_cast<const TupleLitExpr *>(e);
+    for (auto &el : t->elems)
+      use(el.get());
+    return;
+  }
+  case Expr::Kind::Field: {
+    auto *f = static_cast<const FieldExpr *>(e);
+    if (isCopy(e->type))
+      requireLive(f->operand.get()); // Copy フィールドの読みはムーブしない
+    else
+      use(f->operand.get()); // 非 Copy フィールド → ベースをムーブ (保守的)
+    return;
+  }
+  case Expr::Kind::TupleIndex: {
+    auto *t = static_cast<const TupleIndexExpr *>(e);
+    if (isCopy(e->type))
+      requireLive(t->operand.get());
+    else
+      use(t->operand.get());
+    return;
+  }
+  case Expr::Kind::Borrow:
+    requireLive(static_cast<const BorrowExpr *>(e)->operand.get());
+    return;
+  case Expr::Kind::Deref: {
+    auto *d = static_cast<const DerefExpr *>(e);
+    requireLive(d->operand.get());
+    if (!isCopy(e->type))
+      diag_.error(e->span, "E0181", "参照からムーブすることはできません");
+    return;
+  }
+  case Expr::Kind::If: {
+    auto *i = static_cast<const IfExpr *>(e);
+    use(i->cond.get());
+    auto saved = moved_;
+    use(i->then.get());
+    auto afterThen = moved_;
+    moved_ = saved;
+    use(i->els.get());
+    // 合流: どちらかの分岐でムーブされたら以降ムーブ扱い
+    for (auto &kv : afterThen)
+      moved_.insert(kv);
+    return;
+  }
+  case Expr::Kind::Match: {
+    auto *m = static_cast<const MatchExpr *>(e);
+    use(m->scrutinee.get());
+    auto saved = moved_;
+    std::map<std::string, Span> result;
+    bool first = true;
+    for (auto &arm : m->arms) {
+      moved_ = saved;
+      use(arm.body.get());
+      for (auto &b : arm.bindings) // アーム束縛はスコープ外へ
+        if (b != "_")
+          moved_.erase(b);
+      if (first) {
+        result = moved_;
+        first = false;
+      } else {
+        for (auto &kv : moved_)
+          result.insert(kv);
+      }
+    }
+    if (!first)
+      moved_ = result;
+    return;
+  }
+  case Expr::Kind::Block: {
+    auto *blk = static_cast<const BlockExpr *>(e);
+    // ブロックスコープ: 導入した束縛は退出時に復元
+    std::vector<std::pair<std::string, std::pair<bool, Span>>> saved;
+    for (auto &st : blk->stmts) {
+      if (st.kind == Stmt::Kind::Let) {
+        use(st.expr.get());
+        bool had = moved_.count(st.name) != 0;
+        saved.push_back({st.name, {had, had ? moved_[st.name] : Span{}}});
+        moved_.erase(st.name); // 新しい束縛は未ムーブ
+      } else {
+        use(st.expr.get());
+      }
+    }
+    if (blk->tail)
+      use(blk->tail.get());
+    for (auto it = saved.rbegin(); it != saved.rend(); ++it) {
+      moved_.erase(it->first);
+      if (it->second.first)
+        moved_[it->first] = it->second.second;
+    }
+    return;
+  }
+  case Expr::Kind::Assign: {
+    auto *a = static_cast<const AssignExpr *>(e);
+    use(a->value.get());
+    const Expr *tgt = a->target.get();
+    if (tgt->kind == Expr::Kind::Variable &&
+        static_cast<const VariableExpr *>(tgt)->variantTag < 0) {
+      moved_.erase(static_cast<const VariableExpr *>(tgt)->name); // 再初期化
+    } else {
+      requireLive(tgt); // *p / s.x: ベースは生存している必要
+    }
+    return;
+  }
+  case Expr::Kind::For: {
+    auto *f = static_cast<const ForExpr *>(e);
+    use(f->start.get());
+    auto before = moved_;
+    use(f->cond.get());
+    use(f->body.get());
+    // 本体で新たにムーブされた外側変数 = 次の反復で再利用される恐れ
+    for (auto &kv : moved_)
+      if (!before.count(kv.first))
+        diag_.error(kv.second, "E0183",
+                    "ループ本体で値がムーブされています "
+                    "(次の反復で再利用される可能性があります)");
+    return;
+  }
+  }
+}
+
+bool MoveCheck::run(const Program &program) {
+  for (auto &f : program.functions) {
+    moved_.clear();
+    use(f->body.get());
+  }
+  for (auto &e : program.topExprs) {
+    moved_.clear();
+    use(e.get());
+  }
+  return diag_.numErrors() == 0;
+}

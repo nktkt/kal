@@ -1,0 +1,6 @@
+error[E0183]: ループ本体で値がムーブされています (次の反復で再利用される可能性があります)
+ --> tests/diagnostics/move_in_loop.kal:7:13
+  |
+7 |     consume(p);
+  |             ^
+1 個のエラーで中断しました

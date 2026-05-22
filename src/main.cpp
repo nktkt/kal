@@ -10,6 +10,7 @@
 #include "kal/CodeGen.h"
 #include "kal/Diagnostic.h"
 #include "kal/Lexer.h"
+#include "kal/MoveCheck.h"
 #include "kal/Parser.h"
 #include "kal/Sema.h"
 #include "kal/SourceManager.h"
@@ -219,6 +220,13 @@ int main(int argc, char **argv) {
   // 型検査
   Sema sema(diag);
   if (!sema.run(prog)) {
+    errs() << diag.numErrors() << " 個のエラーで中断しました\n";
+    return 1;
+  }
+
+  // ムーブ検査 (use-after-move)
+  MoveCheck moveCheck(diag);
+  if (!moveCheck.run(prog)) {
     errs() << diag.numErrors() << " 個のエラーで中断しました\n";
     return 1;
   }

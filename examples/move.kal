@@ -1,0 +1,25 @@
+# ムーブ意味論: 非 Copy 型 (struct/enum/タプル) は値の受け渡しでムーブされ、
+# 元の変数は以降使えなくなる。Copy 型 (数値/bool/&T) はコピーされる。
+
+struct Buf { n: i64 }
+
+fn consume(b: Buf) -> i64 = b.n;
+
+# a を b にムーブし、b を使う (a はもう使えない)
+{
+  let a = Buf { n: 7 };
+  let b = a;
+  consume(b)
+};                          # => 7
+
+# Copy 型は何度でも使える
+{ let x: i64 = 5; let y = x; x + y };   # => 10
+
+# 参照は借用なのでムーブしない (元の値を使い続けられる)
+fn peek(r: &Buf) -> i64 = (*r).n;
+
+{
+  let c = Buf { n: 99 };
+  let p = peek(&c);         # &c は借用 → c はムーブされない
+  c.n + p
+};                          # => 198

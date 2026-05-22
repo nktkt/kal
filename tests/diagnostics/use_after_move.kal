@@ -1,0 +1,4 @@
+# Using a value after it has been moved into another binding.
+struct P { x: i64 }
+fn use2(a: P, b: P) -> i64 = a.x + b.x;
+fn f() -> i64 = { let p = P { x: 1 }; let q = p; use2(p, q) };

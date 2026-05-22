@@ -117,9 +117,12 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   `let` / `let mut` statements, assignment `place = value`, `*p = e` through
   `&mut`, block-bodied functions `fn f() { … }`. Mutability is checked (no
   assigning to / `&mut`-borrowing a non-`mut` place). Replaced `let … in`.
-- Move semantics; `Copy` vs move; affine types. *(next)*
-- **Borrow checker** on MIR; start with NLL-style (non-lexical) regions: aliasing
-  rules (one `&mut` xor many `&`), no dangling, use-after-move. *(next)*
+- **Move semantics · ✅ done:** `Copy` (numbers, `bool`, `&T`) vs move (`struct`,
+  `enum`, tuples, `&mut T`); affine values; **use-after-move** is a compile error
+  (straight-line, `if`/`match` branch merge, and loop-body moves). A `MoveCheck`
+  pass runs on the typed AST after `Sema`.
+- **Borrow checker**; start with NLL-style (non-lexical) regions: aliasing
+  rules (one `&mut` xor many `&`), no dangling. *(next)*
 - `Drop` / RAII / deterministic destruction.
 - `unsafe` blocks with documented invariants.
 - *Exit:* memory-safe **without GC**; use-after-move, double-free, and aliasing violations are compile errors.

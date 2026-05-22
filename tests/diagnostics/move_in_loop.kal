@@ -1,0 +1,10 @@
+# Moving an outer value inside a loop body (it would be reused next iteration).
+struct P { x: i64 }
+fn consume(p: P) -> i64 = p.x;
+fn f() -> i64 = {
+  let p = P { x: 1 };
+  for i = 0, i < 3, 1 in {
+    consume(p);
+  };
+  0
+};
