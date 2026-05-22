@@ -17,6 +17,8 @@ enum class Tok {
   For,
   In,
   As,
+  Struct,
+  Let,
   // 主要トークン
   Identifier,
   Number,
@@ -30,8 +32,11 @@ enum class Tok {
   Equal,
   Arrow, // ->
   Colon, // :
+  Dot,   // .
   LParen,
   RParen,
+  LBrace, // {
+  RBrace, // }
   Comma,
   Semicolon,
   Unknown,

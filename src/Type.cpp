@@ -15,6 +15,17 @@ std::string Type::str() const {
     return (isSigned ? "i" : "u") + std::to_string(bits);
   case Kind::Float:
     return "f" + std::to_string(bits);
+  case Kind::Struct:
+    return name;
+  case Kind::Tuple: {
+    std::string s = "(";
+    for (size_t i = 0; i < elems.size(); ++i) {
+      if (i)
+        s += ", ";
+      s += elems[i].str();
+    }
+    return s + ")";
+  }
   }
   return "<?>";
 }

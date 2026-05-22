@@ -7,7 +7,23 @@ using namespace kal;
 
 Sema::Sema(DiagnosticEngine &diag) : diag_(diag) {}
 
+const StructDef *Sema::findStruct(const std::string &name) const {
+  auto it = structs_.find(name);
+  return it == structs_.end() ? nullptr : it->second;
+}
+
 bool Sema::run(Program &program) {
+  // 構造体定義を登録 (フィールド型の存在チェックも)
+  for (auto &sd : program.structs) {
+    if (structs_.count(sd->name))
+      diag_.error(sd->nameSpan, "E0045", "構造体が重複定義されています");
+    structs_[sd->name] = sd.get();
+  }
+  for (auto &sd : program.structs)
+    for (auto &f : sd->fields)
+      if (f.type.isStruct() && !findStruct(f.type.name))
+        diag_.error(f.span, "E0046", "未定義の型です: " + f.type.name);
+
   // 組み込み関数のシグネチャ (すべて unit を返す → トップレベルで表示されない)
   funcs_["printi"] = {{Type::intTy(64, true)}, Type::unit()};
   funcs_["printd"] = {{Type::floatTy(64)}, Type::unit()};
@@ -66,6 +82,21 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     break;
   case Expr::Kind::Cast:
     t = checkCast(static_cast<CastExpr *>(e));
+    break;
+  case Expr::Kind::StructLit:
+    t = checkStructLit(static_cast<StructLitExpr *>(e));
+    break;
+  case Expr::Kind::Field:
+    t = checkField(static_cast<FieldExpr *>(e));
+    break;
+  case Expr::Kind::TupleLit:
+    t = checkTupleLit(static_cast<TupleLitExpr *>(e), expected);
+    break;
+  case Expr::Kind::TupleIndex:
+    t = checkTupleIndex(static_cast<TupleIndexExpr *>(e));
+    break;
+  case Expr::Kind::Let:
+    t = checkLet(static_cast<LetExpr *>(e), expected);
     break;
   }
   e->type = t;
@@ -207,4 +238,104 @@ Type Sema::checkCast(CastExpr *e) {
                 "この型へはキャストできません (" + src.str() + " as " +
                     dst.str() + ")");
   return dst;
+}
+
+Type Sema::checkStructLit(StructLitExpr *e) {
+  const StructDef *sd = findStruct(e->structName);
+  if (!sd) {
+    diag_.error(e->nameSpan, "E0060", "未定義の構造体です: " + e->structName);
+    for (auto &fv : e->fieldValues)
+      check(fv.get(), std::nullopt);
+    return Type::unknown();
+  }
+  if (e->fieldValues.size() != sd->fields.size())
+    diag_.error(e->span, "E0061",
+                "フィールド数が一致しません (期待 " +
+                    std::to_string(sd->fields.size()) + ", 実際 " +
+                    std::to_string(e->fieldValues.size()) + ")");
+  for (size_t i = 0; i < e->fieldValues.size(); ++i) {
+    const StructField *decl = nullptr;
+    for (auto &f : sd->fields)
+      if (f.name == e->fieldNames[i]) {
+        decl = &f;
+        break;
+      }
+    if (!decl) {
+      diag_.error(e->fieldValues[i]->span, "E0062",
+                  "そのようなフィールドはありません: " + e->fieldNames[i]);
+      check(e->fieldValues[i].get(), std::nullopt);
+      continue;
+    }
+    Type ft = check(e->fieldValues[i].get(), decl->type);
+    if (ft.isKnown() && ft != decl->type)
+      diag_.error(e->fieldValues[i]->span, "E0063",
+                  "フィールド '" + decl->name + "' の型が一致しません (期待 " +
+                      decl->type.str() + ", 実際 " + ft.str() + ")");
+  }
+  return Type::structTy(e->structName);
+}
+
+Type Sema::checkField(FieldExpr *e) {
+  Type ot = check(e->operand.get(), std::nullopt);
+  if (!ot.isStruct()) {
+    if (ot.isKnown())
+      diag_.error(e->operand->span, "E0064",
+                  "フィールドアクセスには構造体が必要です (実際 " + ot.str() +
+                      ")");
+    return Type::unknown();
+  }
+  const StructDef *sd = findStruct(ot.name);
+  if (!sd)
+    return Type::unknown();
+  for (size_t i = 0; i < sd->fields.size(); ++i)
+    if (sd->fields[i].name == e->field) {
+      e->fieldIndex = static_cast<int>(i);
+      return sd->fields[i].type;
+    }
+  diag_.error(e->fieldSpan, "E0065",
+              "構造体 " + ot.name + " にフィールド '" + e->field +
+                  "' はありません");
+  return Type::unknown();
+}
+
+Type Sema::checkTupleLit(TupleLitExpr *e, std::optional<Type> expected) {
+  std::vector<Type> elems;
+  for (size_t i = 0; i < e->elems.size(); ++i) {
+    std::optional<Type> hint;
+    if (expected && expected->isTuple() && i < expected->elems.size())
+      hint = expected->elems[i];
+    elems.push_back(check(e->elems[i].get(), hint));
+  }
+  return Type::tupleTy(std::move(elems));
+}
+
+Type Sema::checkTupleIndex(TupleIndexExpr *e) {
+  Type ot = check(e->operand.get(), std::nullopt);
+  if (!ot.isTuple()) {
+    if (ot.isKnown())
+      diag_.error(e->operand->span, "E0066",
+                  "タプルではないものに添字アクセスしています (実際 " +
+                      ot.str() + ")");
+    return Type::unknown();
+  }
+  if (e->index >= ot.elems.size()) {
+    diag_.error(e->indexSpan, "E0067",
+                "タプルの添字が範囲外です (要素数 " +
+                    std::to_string(ot.elems.size()) + ")");
+    return Type::unknown();
+  }
+  return ot.elems[e->index];
+}
+
+Type Sema::checkLet(LetExpr *e, std::optional<Type> expected) {
+  Type vt = check(e->value.get(), std::nullopt);
+  bool hadOld = locals_.count(e->name) != 0;
+  Type old = hadOld ? locals_[e->name] : Type();
+  locals_[e->name] = vt;
+  Type bt = check(e->body.get(), expected);
+  if (hadOld)
+    locals_[e->name] = old;
+  else
+    locals_.erase(e->name);
+  return bt;
 }

@@ -44,35 +44,125 @@ ExprPtr Parser::parseNumberExpr() {
 }
 
 bool Parser::parseType(Type &out) {
+  // タプル型 / unit / 括弧:  ()  (T)  (T1, T2, ...)
+  if (cur_.kind == Tok::LParen) {
+    advance();
+    if (cur_.kind == Tok::RParen) {
+      advance();
+      out = Type::unit();
+      return true;
+    }
+    std::vector<Type> elems;
+    for (;;) {
+      Type e;
+      if (!parseType(e))
+        return false;
+      elems.push_back(e);
+      if (cur_.kind == Tok::RParen)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0032", "型リストには ',' か ')' が必要です");
+        return false;
+      }
+      advance();
+    }
+    advance(); // ')'
+    out = elems.size() == 1 ? elems[0] : Type::tupleTy(std::move(elems));
+    return true;
+  }
   if (cur_.kind != Tok::Identifier) {
-    diag_.error(cur_.span, "E0030", "型名が必要です");
+    diag_.error(cur_.span, "E0030", "型が必要です");
     return false;
   }
-  if (!typeFromName(cur_.text, out)) {
-    diag_.error(cur_.span, "E0031", "未知の型名です");
-    return false;
+  // 組み込み型名、なければ struct 名 (存在チェックは Sema)
+  if (typeFromName(cur_.text, out)) {
+    advance();
+    return true;
   }
+  out = Type::structTy(cur_.text);
   advance();
   return true;
 }
 
 ExprPtr Parser::parseParenExpr() {
+  Span s = cur_.span;
   advance(); // '('
-  auto v = parseExpression();
-  if (!v)
+  auto first = parseExpression();
+  if (!first)
     return nullptr;
+
+  if (cur_.kind == Tok::Comma) {
+    // タプルリテラル
+    std::vector<ExprPtr> elems;
+    elems.push_back(std::move(first));
+    while (cur_.kind == Tok::Comma) {
+      advance();
+      if (cur_.kind == Tok::RParen)
+        break; // 末尾カンマを許可
+      auto e = parseExpression();
+      if (!e)
+        return nullptr;
+      elems.push_back(std::move(e));
+    }
+    if (cur_.kind != Tok::RParen) {
+      diag_.error(cur_.span, "E0010", "')' が必要です");
+      return nullptr;
+    }
+    Span end = cur_.span;
+    advance();
+    return std::make_unique<TupleLitExpr>(Span{s.fileId, s.start, end.end},
+                                          std::move(elems));
+  }
+
   if (cur_.kind != Tok::RParen) {
     diag_.error(cur_.span, "E0010", "')' が必要です");
     return nullptr;
   }
   advance(); // ')'
-  return v;
+  return first;
 }
 
 ExprPtr Parser::parseIdentifierExpr() {
   Span idSpan = cur_.span;
   std::string name = cur_.text;
   advance();
+
+  // 構造体リテラル:  Name { f: e, ... }
+  if (cur_.kind == Tok::LBrace) {
+    advance();
+    auto lit = std::make_unique<StructLitExpr>(idSpan, name, idSpan);
+    if (cur_.kind != Tok::RBrace) {
+      for (;;) {
+        if (cur_.kind != Tok::Identifier) {
+          diag_.error(cur_.span, "E0053", "フィールド名が必要です");
+          return nullptr;
+        }
+        std::string fname = cur_.text;
+        advance();
+        if (cur_.kind != Tok::Colon) {
+          diag_.error(cur_.span, "E0054", "フィールドには ': 値' が必要です");
+          return nullptr;
+        }
+        advance();
+        auto fv = parseExpression();
+        if (!fv)
+          return nullptr;
+        lit->fieldNames.push_back(std::move(fname));
+        lit->fieldValues.push_back(std::move(fv));
+        if (cur_.kind == Tok::RBrace)
+          break;
+        if (cur_.kind != Tok::Comma) {
+          diag_.error(cur_.span, "E0055", "フィールドの後には ',' か '}' が必要です");
+          return nullptr;
+        }
+        advance();
+      }
+    }
+    Span end = cur_.span;
+    advance(); // '}'
+    lit->span = {idSpan.fileId, idSpan.start, end.end};
+    return lit;
+  }
 
   if (cur_.kind != Tok::LParen) // 変数参照
     return std::make_unique<VariableExpr>(idSpan, std::move(name));
@@ -184,6 +274,8 @@ ExprPtr Parser::parsePrimary() {
     return parseIfExpr();
   case Tok::For:
     return parseForExpr();
+  case Tok::Let:
+    return parseLetExpr();
   default:
     diag_.error(cur_.span, "E0002", "式が必要です");
     return nullptr;
@@ -194,17 +286,71 @@ ExprPtr Parser::parseUnary() {
   auto e = parsePrimary();
   if (!e)
     return nullptr;
-  // 後置キャスト: `expr as Type` (二項演算子より強く結合)
-  while (cur_.kind == Tok::As) {
-    advance();
-    Span typeSpan = cur_.span;
-    Type t;
-    if (!parseType(t))
-      return nullptr;
-    Span full{e->span.fileId, e->span.start, typeSpan.end};
-    e = std::make_unique<CastExpr>(full, std::move(e), t);
+  // 後置: フィールド/タプルアクセス `.x` `.0` とキャスト `as T`
+  // (いずれも二項演算子より強く結合する)
+  for (;;) {
+    if (cur_.kind == Tok::Dot) {
+      advance();
+      if (cur_.kind == Tok::Identifier) {
+        Span fspan = cur_.span;
+        std::string fname = cur_.text;
+        advance();
+        Span full{e->span.fileId, e->span.start, fspan.end};
+        e = std::make_unique<FieldExpr>(full, std::move(e), std::move(fname),
+                                        fspan);
+      } else if (cur_.kind == Tok::Number && !cur_.isFloat) {
+        Span ispan = cur_.span;
+        unsigned idx = static_cast<unsigned>(cur_.intValue);
+        advance();
+        Span full{e->span.fileId, e->span.start, ispan.end};
+        e = std::make_unique<TupleIndexExpr>(full, std::move(e), idx, ispan);
+      } else {
+        diag_.error(cur_.span, "E0056",
+                    "'.' の後にはフィールド名かタプル番号が必要です");
+        return nullptr;
+      }
+    } else if (cur_.kind == Tok::As) {
+      advance();
+      Span typeSpan = cur_.span;
+      Type t;
+      if (!parseType(t))
+        return nullptr;
+      Span full{e->span.fileId, e->span.start, typeSpan.end};
+      e = std::make_unique<CastExpr>(full, std::move(e), t);
+    } else {
+      break;
+    }
   }
   return e;
+}
+
+ExprPtr Parser::parseLetExpr() {
+  Span s = cur_.span;
+  advance(); // 'let'
+  if (cur_.kind != Tok::Identifier) {
+    diag_.error(cur_.span, "E0050", "let の後には変数名が必要です");
+    return nullptr;
+  }
+  std::string name = cur_.text;
+  advance();
+  if (cur_.kind != Tok::Equal) {
+    diag_.error(cur_.span, "E0051", "let には '=' が必要です");
+    return nullptr;
+  }
+  advance();
+  auto value = parseExpression();
+  if (!value)
+    return nullptr;
+  if (cur_.kind != Tok::In) {
+    diag_.error(cur_.span, "E0052", "let には 'in' が必要です");
+    return nullptr;
+  }
+  advance();
+  auto body = parseExpression();
+  if (!body)
+    return nullptr;
+  return std::make_unique<LetExpr>(s, std::move(name), std::move(value),
+                                   std::move(body));
 }
 
 ExprPtr Parser::parseBinOpRHS(int exprPrec, ExprPtr lhs) {
@@ -331,6 +477,55 @@ std::unique_ptr<Prototype> Parser::parseExtern() {
   return parsePrototype();
 }
 
+std::unique_ptr<StructDef> Parser::parseStructDef() {
+  Span start = cur_.span;
+  advance(); // 'struct'
+  if (cur_.kind != Tok::Identifier) {
+    diag_.error(cur_.span, "E0040", "構造体名が必要です");
+    return nullptr;
+  }
+  auto sd = std::make_unique<StructDef>();
+  sd->name = cur_.text;
+  sd->nameSpan = cur_.span;
+  advance();
+
+  if (cur_.kind != Tok::LBrace) {
+    diag_.error(cur_.span, "E0041", "構造体には '{' が必要です");
+    return nullptr;
+  }
+  advance();
+
+  while (cur_.kind != Tok::RBrace) {
+    if (cur_.kind != Tok::Identifier) {
+      diag_.error(cur_.span, "E0042", "フィールド名が必要です");
+      return nullptr;
+    }
+    StructField f;
+    f.name = cur_.text;
+    f.span = cur_.span;
+    advance();
+    if (cur_.kind != Tok::Colon) {
+      diag_.error(cur_.span, "E0043", "フィールドには ': 型' が必要です");
+      return nullptr;
+    }
+    advance();
+    if (!parseType(f.type))
+      return nullptr;
+    sd->fields.push_back(std::move(f));
+    if (cur_.kind != Tok::Comma)
+      break;
+    advance(); // ',' (末尾カンマ可)
+  }
+  if (cur_.kind != Tok::RBrace) {
+    diag_.error(cur_.span, "E0044", "構造体には '}' が必要です");
+    return nullptr;
+  }
+  Span end = cur_.span;
+  advance(); // '}'
+  sd->span = {start.fileId, start.start, end.end};
+  return sd;
+}
+
 Program Parser::parseProgram() {
   Program prog;
   for (;;) {
@@ -340,7 +535,12 @@ Program Parser::parseProgram() {
       advance();
       continue;
     }
-    if (cur_.kind == Tok::Fn) {
+    if (cur_.kind == Tok::Struct) {
+      if (auto sd = parseStructDef())
+        prog.structs.push_back(std::move(sd));
+      else
+        recover();
+    } else if (cur_.kind == Tok::Fn) {
       if (auto f = parseDefinition())
         prog.functions.push_back(std::move(f));
       else

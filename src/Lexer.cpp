@@ -64,12 +64,17 @@ Token Lexer::next() {
       k = Tok::In;
     else if (s == "as")
       k = Tok::As;
+    else if (s == "struct")
+      k = Tok::Struct;
+    else if (s == "let")
+      k = Tok::Let;
     t.text = s.str();
     return make(k);
   }
 
-  // 数値リテラル (整数 or 小数)
-  if (std::isdigit(static_cast<unsigned char>(c)) || c == '.') {
+  // 数値リテラル (整数 or 小数)。先頭は必ず数字 ('.' 始まりは認めない →
+  // '.' をフィールド/タプルアクセスの Dot として使えるようにする)
+  if (std::isdigit(static_cast<unsigned char>(c))) {
     bool isFloat = false;
     while (pos_ < buf_.size() &&
            std::isdigit(static_cast<unsigned char>(buf_[pos_])))
@@ -122,10 +127,16 @@ Token Lexer::next() {
     return make(Tok::Equal);
   case ':':
     return make(Tok::Colon);
+  case '.':
+    return make(Tok::Dot);
   case '(':
     return make(Tok::LParen);
   case ')':
     return make(Tok::RParen);
+  case '{':
+    return make(Tok::LBrace);
+  case '}':
+    return make(Tok::RBrace);
   case ',':
     return make(Tok::Comma);
   case ';':

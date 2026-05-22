@@ -1,0 +1,2 @@
+# Field access requires a struct; the operand here is an integer.
+(1 + 2).x;

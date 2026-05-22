@@ -30,12 +30,14 @@ private:
   ExprPtr parseIdentifierExpr();
   ExprPtr parseIfExpr();
   ExprPtr parseForExpr();
+  ExprPtr parseLetExpr();
 
-  bool parseType(Type &out); // 型名を 1 つ読む
+  bool parseType(Type &out); // 型を 1 つ読む (組み込み型/struct名/タプル)
 
   std::unique_ptr<Prototype> parsePrototype();
   std::unique_ptr<FunctionDef> parseDefinition();
   std::unique_ptr<Prototype> parseExtern();
+  std::unique_ptr<StructDef> parseStructDef();
 
   Lexer &lexer_;
   DiagnosticEngine &diag_;

@@ -96,10 +96,17 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 - **LLVM optimization pipeline** via `PassBuilder` (`-O0`…`-O3`). ✅
 - CI builds each example AOT and checks the binary's output. ✅
 
-**2b — Aggregates & pattern matching** *(next)*
-- `struct`, `enum` (algebraic data types), tuples, fixed arrays, slices.
+**2b-i — Product types & locals · ✅ done**
+- `struct` (nominal, by-value), field access, tuples `(T, U)` with `.0`/`.1`. ✅
+- `let name = e in body` immutable local bindings. ✅
+- Aggregates flow through Sema (typed) and CodeGen (`insertvalue`/`extractvalue`),
+  and work in both JIT and AOT builds (tested). ✅
+
+**2b-ii — Sum types & pattern matching** *(next)*
+- `enum` (Rust-style algebraic data types with payloads).
 - `match` with exhaustiveness checking.
-- *Exit:* compile programs using user-defined data types to native binaries.
+- Later: fixed arrays, slices.
+- *Exit:* compile programs using user-defined sum types to native binaries.
 
 #### Phase 3 — Ownership & borrow checking · **XL** · → v0.5 *(the differentiator)*
 - Move semantics; `Copy` vs move; affine types.

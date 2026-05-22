@@ -1,0 +1,6 @@
+error[E0064]: フィールドアクセスには構造体が必要です (実際 i32)
+ --> tests/diagnostics/field_on_non_struct.kal:2:2
+  |
+2 | (1 + 2).x;
+  |  ^^^^^
+1 個のエラーで中断しました

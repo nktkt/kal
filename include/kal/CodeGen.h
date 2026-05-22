@@ -34,7 +34,13 @@ private:
   llvm::Value *genIf(const IfExpr *e);
   llvm::Value *genFor(const ForExpr *e);
   llvm::Value *genCast(const CastExpr *e);
+  llvm::Value *genStructLit(const StructLitExpr *e);
+  llvm::Value *genField(const FieldExpr *e);
+  llvm::Value *genTupleLit(const TupleLitExpr *e);
+  llvm::Value *genTupleIndex(const TupleIndexExpr *e);
+  llvm::Value *genLet(const LetExpr *e);
 
+  llvm::StructType *getStructType(const std::string &name); // 名前→LLVM構造体型
   llvm::Function *declareProto(const Prototype &p);
   bool genFunction(const FunctionDef &f);
   void emitRuntimeDefs(); // printi/printd/putchard の本体 (libc 呼び出し)
@@ -45,6 +51,8 @@ private:
   std::unique_ptr<llvm::Module> module_;
   llvm::IRBuilder<> builder_;
   std::map<std::string, llvm::Value *> namedValues_;
+  std::map<std::string, const StructDef *> structDefs_;
+  std::map<std::string, llvm::StructType *> structTypes_;
 };
 
 } // namespace kal

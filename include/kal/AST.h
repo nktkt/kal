@@ -13,7 +13,20 @@ namespace kal {
 /// 式ノードの基底。codegen は持たない (CodeGen が kind で分岐する)。
 /// `type` は Sema (型検査) が後から埋める。
 struct Expr {
-  enum class Kind { Number, Variable, Binary, Call, If, For, Cast };
+  enum class Kind {
+    Number,
+    Variable,
+    Binary,
+    Call,
+    If,
+    For,
+    Cast,
+    StructLit,
+    Field,
+    TupleLit,
+    TupleIndex,
+    Let,
+  };
   Kind kind;
   Span span;
   Type type; // Sema が設定する計算結果の型
@@ -38,6 +51,54 @@ struct CastExpr : Expr {
   CastExpr(Span s, ExprPtr operand, Type targetType)
       : Expr(Kind::Cast, s), operand(std::move(operand)),
         targetType(targetType) {}
+};
+
+/// 構造体リテラル: `Name { f1: e1, f2: e2 }` (fieldNames[i] = fieldValues[i])
+struct StructLitExpr : Expr {
+  std::string structName;
+  Span nameSpan;
+  std::vector<std::string> fieldNames;
+  std::vector<ExprPtr> fieldValues;
+  StructLitExpr(Span s, std::string n, Span nameSpan)
+      : Expr(Kind::StructLit, s), structName(std::move(n)), nameSpan(nameSpan) {}
+};
+
+/// フィールドアクセス: `operand.field`
+struct FieldExpr : Expr {
+  ExprPtr operand;
+  std::string field;
+  Span fieldSpan;
+  int fieldIndex = -1; // Sema が設定する
+  FieldExpr(Span s, ExprPtr operand, std::string field, Span fieldSpan)
+      : Expr(Kind::Field, s), operand(std::move(operand)),
+        field(std::move(field)), fieldSpan(fieldSpan) {}
+};
+
+/// タプルリテラル: `(e1, e2, ...)`
+struct TupleLitExpr : Expr {
+  std::vector<ExprPtr> elems;
+  TupleLitExpr(Span s, std::vector<ExprPtr> elems)
+      : Expr(Kind::TupleLit, s), elems(std::move(elems)) {}
+};
+
+/// タプル要素アクセス: `operand.N`
+struct TupleIndexExpr : Expr {
+  ExprPtr operand;
+  unsigned index;
+  Span indexSpan;
+  TupleIndexExpr(Span s, ExprPtr operand, unsigned index, Span indexSpan)
+      : Expr(Kind::TupleIndex, s), operand(std::move(operand)), index(index),
+        indexSpan(indexSpan) {}
+};
+
+/// ローカル束縛 (不変): `let name = value in body`
+struct LetExpr : Expr {
+  std::string name;
+  ExprPtr value;
+  ExprPtr body;
+  LetExpr(Span s, std::string name, ExprPtr value, ExprPtr body)
+      : Expr(Kind::Let, s), name(std::move(name)), value(std::move(value)),
+        body(std::move(body)) {}
 };
 
 struct VariableExpr : Expr {
@@ -98,8 +159,24 @@ struct FunctionDef {
   ExprPtr body;
 };
 
+/// 構造体の 1 フィールド。
+struct StructField {
+  std::string name;
+  Type type;
+  Span span;
+};
+
+/// 構造体定義: `struct Name { f: T, ... }`
+struct StructDef {
+  std::string name;
+  Span nameSpan;
+  std::vector<StructField> fields;
+  Span span;
+};
+
 /// 1 つのソースをパースした結果。
 struct Program {
+  std::vector<std::unique_ptr<StructDef>> structs;
   std::vector<std::unique_ptr<Prototype>> externs;
   std::vector<std::unique_ptr<FunctionDef>> functions;
   std::vector<ExprPtr> topExprs;

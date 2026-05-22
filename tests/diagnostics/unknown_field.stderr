@@ -1,0 +1,6 @@
+error[E0065]: 構造体 P にフィールド 'y' はありません
+ --> tests/diagnostics/unknown_field.kal:3:23
+  |
+3 | fn f(p: P) -> i64 = p.y;
+  |                       ^
+1 個のエラーで中断しました

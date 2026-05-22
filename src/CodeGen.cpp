@@ -29,10 +29,31 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
                         : llvm::Type::getDoubleTy(ctx_);
   case kal::Type::Kind::Unit:
     return llvm::Type::getVoidTy(ctx_);
+  case kal::Type::Kind::Struct:
+    return getStructType(t.name);
+  case kal::Type::Kind::Tuple: {
+    std::vector<llvm::Type *> elems;
+    for (auto &e : t.elems)
+      elems.push_back(toLLVM(e));
+    return StructType::get(ctx_, elems);
+  }
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
   return nullptr;
+}
+
+StructType *CodeGen::getStructType(const std::string &name) {
+  auto it = structTypes_.find(name);
+  if (it != structTypes_.end())
+    return it->second;
+  const StructDef *sd = structDefs_[name];
+  std::vector<llvm::Type *> fieldTys;
+  for (auto &f : sd->fields)
+    fieldTys.push_back(toLLVM(f.type));
+  StructType *st = StructType::create(ctx_, fieldTys, name);
+  structTypes_[name] = st;
+  return st;
 }
 
 Value *CodeGen::genExpr(const Expr *e) {
@@ -51,8 +72,67 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genFor(static_cast<const ForExpr *>(e));
   case Expr::Kind::Cast:
     return genCast(static_cast<const CastExpr *>(e));
+  case Expr::Kind::StructLit:
+    return genStructLit(static_cast<const StructLitExpr *>(e));
+  case Expr::Kind::Field:
+    return genField(static_cast<const FieldExpr *>(e));
+  case Expr::Kind::TupleLit:
+    return genTupleLit(static_cast<const TupleLitExpr *>(e));
+  case Expr::Kind::TupleIndex:
+    return genTupleIndex(static_cast<const TupleIndexExpr *>(e));
+  case Expr::Kind::Let:
+    return genLet(static_cast<const LetExpr *>(e));
   }
   return nullptr;
+}
+
+Value *CodeGen::genStructLit(const StructLitExpr *e) {
+  const StructDef *sd = structDefs_[e->structName];
+  StructType *st = getStructType(e->structName);
+  Value *agg = UndefValue::get(st);
+  // 宣言順に、対応する初期化式を探して詰める
+  for (size_t i = 0; i < sd->fields.size(); ++i) {
+    Value *fv = nullptr;
+    for (size_t j = 0; j < e->fieldNames.size(); ++j)
+      if (e->fieldNames[j] == sd->fields[i].name) {
+        fv = genExpr(e->fieldValues[j].get());
+        break;
+      }
+    agg = builder_.CreateInsertValue(agg, fv, {static_cast<unsigned>(i)});
+  }
+  return agg;
+}
+
+Value *CodeGen::genField(const FieldExpr *e) {
+  Value *v = genExpr(e->operand.get());
+  return builder_.CreateExtractValue(v, {static_cast<unsigned>(e->fieldIndex)},
+                                     "field");
+}
+
+Value *CodeGen::genTupleLit(const TupleLitExpr *e) {
+  llvm::Type *tt = toLLVM(e->type);
+  Value *agg = UndefValue::get(tt);
+  for (size_t i = 0; i < e->elems.size(); ++i)
+    agg = builder_.CreateInsertValue(agg, genExpr(e->elems[i].get()),
+                                     {static_cast<unsigned>(i)});
+  return agg;
+}
+
+Value *CodeGen::genTupleIndex(const TupleIndexExpr *e) {
+  Value *v = genExpr(e->operand.get());
+  return builder_.CreateExtractValue(v, {e->index}, "telem");
+}
+
+Value *CodeGen::genLet(const LetExpr *e) {
+  Value *v = genExpr(e->value.get());
+  Value *old = namedValues_.count(e->name) ? namedValues_[e->name] : nullptr;
+  namedValues_[e->name] = v;
+  Value *b = genExpr(e->body.get());
+  if (old)
+    namedValues_[e->name] = old;
+  else
+    namedValues_.erase(e->name);
+  return b;
 }
 
 Value *CodeGen::genNumber(const NumberExpr *e) {
@@ -259,6 +339,10 @@ bool CodeGen::genFunction(const FunctionDef &f) {
 
 std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   module_ = std::make_unique<Module>("kal", ctx_);
+
+  // 構造体定義を登録 (toLLVM が名前から型を引けるように)
+  for (auto &sd : program.structs)
+    structDefs_[sd->name] = sd.get();
 
   // (1) 全プロトタイプを宣言 (前方参照・相互再帰に対応)
   for (auto &ex : program.externs)

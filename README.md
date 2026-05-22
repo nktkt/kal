@@ -70,7 +70,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 ## Language reference
 
 ### Types
-`i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, and `()` (unit).
+`i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), plus
+user-defined **`struct`s** and **tuples** `(T, U, …)`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 There are **no implicit conversions** — convert explicitly with `as`.
@@ -118,6 +119,21 @@ for i = start, cond, step in body   # while cond (bool) holds; i += step each it
 for i = 1, i < 6, 1 in printi(i as i64);   # 1 2 3 4 5  (step defaults to 1)
 ```
 
+### Structs, tuples & let
+
+```
+struct Point { x: f64, y: f64 }     # nominal product type
+
+fn norm2(p: Point) -> f64 = p.x * p.x + p.y * p.y;   # `.field` access
+
+let p = Point { x: 3.0, y: 4.0 } in norm2(p);   # => 25   (let ... in expression)
+
+let pair = (6, 7) in pair.0 * pair.1;           # => 42   (tuple + .0/.1)
+```
+
+Structs and tuples are value types (passed/returned by value). `let name = e in
+body` binds an immutable local for `body`.
+
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
@@ -142,7 +158,7 @@ kal/
 │   ├── Sema.h               #   type checker (annotates the AST)
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast
+├── examples/                # arith, fib, loop, extern, cast, struct
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```
