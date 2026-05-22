@@ -3,6 +3,8 @@
 
 #include "kal/Diagnostic.h"
 
+#include <functional>
+
 using namespace kal;
 
 Sema::Sema(DiagnosticEngine &diag) : diag_(diag) {}
@@ -20,7 +22,7 @@ const EnumDef *Sema::findEnum(const std::string &name) const {
 Type Sema::resolve(Type t) const {
   if (t.kind == Type::Kind::Struct && findEnum(t.name))
     t.kind = Type::Kind::Enum; // パーサが Struct と誤判定した enum 名を直す
-  else if (t.kind == Type::Kind::Tuple)
+  else if (t.kind == Type::Kind::Tuple || t.kind == Type::Kind::Ref)
     for (auto &e : t.elems)
       e = resolve(e);
   return t;
@@ -58,12 +60,20 @@ bool Sema::run(Program &program) {
     f->proto->retType = resolve(f->proto->retType);
   }
 
-  // (3) 型存在チェック
-  auto knownType = [&](const Type &t) {
+  // (3) 型存在チェック (Ref/Tuple は再帰的に)
+  std::function<bool(const Type &)> knownType = [&](const Type &t) -> bool {
     if (t.isStruct())
       return findStruct(t.name) != nullptr;
     if (t.isEnum())
       return findEnum(t.name) != nullptr;
+    if (t.isRef())
+      return knownType(t.elems[0]);
+    if (t.isTuple()) {
+      for (auto &e : t.elems)
+        if (!knownType(e))
+          return false;
+      return true;
+    }
     return true;
   };
   for (auto &sd : program.structs)
@@ -161,6 +171,12 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     break;
   case Expr::Kind::Match:
     t = checkMatch(static_cast<MatchExpr *>(e), expected);
+    break;
+  case Expr::Kind::Borrow:
+    t = checkBorrow(static_cast<BorrowExpr *>(e), expected);
+    break;
+  case Expr::Kind::Deref:
+    t = checkDeref(static_cast<DerefExpr *>(e));
     break;
   }
   e->type = t;
@@ -426,7 +442,19 @@ Type Sema::checkTupleIndex(TupleIndexExpr *e) {
 }
 
 Type Sema::checkLet(LetExpr *e, std::optional<Type> expected) {
-  Type vt = check(e->value.get(), std::nullopt);
+  std::optional<Type> hint;
+  if (e->hasAnnotation) {
+    e->annotatedType = resolve(e->annotatedType);
+    hint = e->annotatedType;
+  }
+  Type vt = check(e->value.get(), hint);
+  if (e->hasAnnotation) {
+    if (vt.isKnown() && vt != e->annotatedType)
+      diag_.error(e->value->span, "E0053",
+                  "let の値の型が注釈と一致しません (期待 " +
+                      e->annotatedType.str() + ", 実際 " + vt.str() + ")");
+    vt = e->annotatedType;
+  }
   bool hadOld = locals_.count(e->name) != 0;
   Type old = hadOld ? locals_[e->name] : Type();
   locals_[e->name] = vt;
@@ -436,6 +464,26 @@ Type Sema::checkLet(LetExpr *e, std::optional<Type> expected) {
   else
     locals_.erase(e->name);
   return bt;
+}
+
+Type Sema::checkBorrow(BorrowExpr *e, std::optional<Type> expected) {
+  // 期待が参照型なら、その指す型をヒントとして伝える
+  std::optional<Type> hint;
+  if (expected && expected->isRef())
+    hint = expected->pointee();
+  Type t = check(e->operand.get(), hint);
+  return Type::refTy(t, e->isMut);
+}
+
+Type Sema::checkDeref(DerefExpr *e) {
+  Type t = check(e->operand.get(), std::nullopt);
+  if (!t.isRef()) {
+    if (t.isKnown())
+      diag_.error(e->span, "E0160",
+                  "参照ではないものを参照外ししています (実際 " + t.str() + ")");
+    return Type::unknown();
+  }
+  return t.pointee();
 }
 
 Type Sema::checkMatch(MatchExpr *e, std::optional<Type> expected) {

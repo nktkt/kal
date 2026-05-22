@@ -1,0 +1,6 @@
+error[E0104]: 引数の型が一致しません (期待 &f64, 実際 &i64)
+ --> tests/diagnostics/ref_type_mismatch.kal:3:21
+  |
+3 | let x: i64 = 1 in f(&x);
+  |                     ^^
+1 個のエラーで中断しました

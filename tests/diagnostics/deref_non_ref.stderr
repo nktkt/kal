@@ -1,0 +1,6 @@
+error[E0160]: 参照ではないものを参照外ししています (実際 i64)
+ --> tests/diagnostics/deref_non_ref.kal:2:23
+  |
+2 | fn f(n: i64) -> i64 = *n;
+  |                       ^^
+1 個のエラーで中断しました

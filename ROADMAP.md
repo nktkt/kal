@@ -110,8 +110,12 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 - Deferred to a later phase: fixed arrays, slices.
 
 #### Phase 3 — Ownership & borrow checking · **XL** · → v0.5 *(the differentiator)*
+- **Reference foundation · ✅ done (pre-step):** `&T` / `&mut T` types, `&`/`&mut`
+  borrows, `*p` dereference, pass-by-reference, and `let name: T = …` annotations.
+  Locals are now memory-backed (alloca) so they're addressable; `-O` re-promotes
+  them. References are currently *read-only and unchecked*.
 - Move semantics; `Copy` vs move; affine types.
-- References `&T` / `&mut T`; aliasing rules.
+- Mutation through `&mut` and assignment; aliasing rules.
 - **Borrow checker** on MIR; start with NLL-style (non-lexical) regions.
 - `Drop` / RAII / deterministic destruction.
 - `unsafe` blocks with documented invariants.

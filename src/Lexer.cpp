@@ -72,6 +72,8 @@ Token Lexer::next() {
       k = Tok::Enum;
     else if (s == "match")
       k = Tok::Match;
+    else if (s == "mut")
+      k = Tok::Mut;
     t.text = s.str();
     return make(k);
   }
@@ -137,6 +139,8 @@ Token Lexer::next() {
     return make(Tok::Colon);
   case '.':
     return make(Tok::Dot);
+  case '&':
+    return make(Tok::Amp);
   case '(':
     return make(Tok::LParen);
   case ')':

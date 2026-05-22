@@ -27,6 +27,8 @@ std::string Type::str() const {
     }
     return s + ")";
   }
+  case Kind::Ref:
+    return std::string("&") + (refMut ? "mut " : "") + elems[0].str();
   }
   return "<?>";
 }

@@ -44,6 +44,20 @@ ExprPtr Parser::parseNumberExpr() {
 }
 
 bool Parser::parseType(Type &out) {
+  // 参照型:  &T  /  &mut T
+  if (cur_.kind == Tok::Amp) {
+    advance();
+    bool mut = false;
+    if (cur_.kind == Tok::Mut) {
+      mut = true;
+      advance();
+    }
+    Type pointee;
+    if (!parseType(pointee))
+      return false;
+    out = Type::refTy(pointee, mut);
+    return true;
+  }
   // タプル型 / unit / 括弧:  ()  (T)  (T1, T2, ...)
   if (cur_.kind == Tok::LParen) {
     advance();
@@ -302,6 +316,31 @@ ExprPtr Parser::parsePrimary() {
 }
 
 ExprPtr Parser::parseUnary() {
+  // 前置: 借用 `&` `&mut`、参照外し `*`
+  if (cur_.kind == Tok::Amp) {
+    Span s = cur_.span;
+    advance();
+    bool mut = false;
+    if (cur_.kind == Tok::Mut) {
+      mut = true;
+      advance();
+    }
+    auto operand = parseUnary();
+    if (!operand)
+      return nullptr;
+    Span full{s.fileId, s.start, operand->span.end};
+    return std::make_unique<BorrowExpr>(full, std::move(operand), mut);
+  }
+  if (cur_.kind == Tok::Star) {
+    Span s = cur_.span;
+    advance();
+    auto operand = parseUnary();
+    if (!operand)
+      return nullptr;
+    Span full{s.fileId, s.start, operand->span.end};
+    return std::make_unique<DerefExpr>(full, std::move(operand));
+  }
+
   auto e = parsePrimary();
   if (!e)
     return nullptr;
@@ -352,6 +391,15 @@ ExprPtr Parser::parseLetExpr() {
   }
   std::string name = cur_.text;
   advance();
+  // 省略可能な型注釈:  let name: T = ...
+  Type annotated;
+  bool hasAnnotation = false;
+  if (cur_.kind == Tok::Colon) {
+    advance();
+    if (!parseType(annotated))
+      return nullptr;
+    hasAnnotation = true;
+  }
   if (cur_.kind != Tok::Equal) {
     diag_.error(cur_.span, "E0051", "let には '=' が必要です");
     return nullptr;
@@ -368,8 +416,11 @@ ExprPtr Parser::parseLetExpr() {
   auto body = parseExpression();
   if (!body)
     return nullptr;
-  return std::make_unique<LetExpr>(s, std::move(name), std::move(value),
-                                   std::move(body));
+  auto le = std::make_unique<LetExpr>(s, std::move(name), std::move(value),
+                                      std::move(body));
+  le->annotatedType = annotated;
+  le->hasAnnotation = hasAnnotation;
+  return le;
 }
 
 ExprPtr Parser::parseMatchExpr() {

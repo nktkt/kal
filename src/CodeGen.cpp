@@ -36,6 +36,8 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
     return getStructType(t.name);
   case kal::Type::Kind::Enum:
     return getEnumType(t.name);
+  case kal::Type::Kind::Ref:
+    return PointerType::getUnqual(ctx_);
   case kal::Type::Kind::Tuple: {
     std::vector<llvm::Type *> elems;
     for (auto &e : t.elems)
@@ -136,6 +138,10 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genLet(static_cast<const LetExpr *>(e));
   case Expr::Kind::Match:
     return genMatch(static_cast<const MatchExpr *>(e));
+  case Expr::Kind::Borrow:
+    return genBorrow(static_cast<const BorrowExpr *>(e));
+  case Expr::Kind::Deref:
+    return genDeref(static_cast<const DerefExpr *>(e));
   }
   return nullptr;
 }
@@ -179,8 +185,10 @@ Value *CodeGen::genTupleIndex(const TupleIndexExpr *e) {
 
 Value *CodeGen::genLet(const LetExpr *e) {
   Value *v = genExpr(e->value.get());
+  AllocaInst *slot = entryAlloca(toLLVM(e->value->type), e->name);
+  builder_.CreateStore(v, slot);
   Value *old = namedValues_.count(e->name) ? namedValues_[e->name] : nullptr;
-  namedValues_[e->name] = v;
+  namedValues_[e->name] = slot;
   Value *b = genExpr(e->body.get());
   if (old)
     namedValues_[e->name] = old;
@@ -247,11 +255,14 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
         if (arm.bindings[i] == "_")
           continue;
         Value *fv = builder_.CreateExtractValue(pv, {static_cast<unsigned>(i)});
+        AllocaInst *bslot =
+            entryAlloca(toLLVM(arm.payloadTypes[i]), arm.bindings[i]);
+        builder_.CreateStore(fv, bslot);
         boundNames.push_back(arm.bindings[i]);
         oldVals.push_back(namedValues_.count(arm.bindings[i])
                               ? namedValues_[arm.bindings[i]]
                               : nullptr);
-        namedValues_[arm.bindings[i]] = fv;
+        namedValues_[arm.bindings[i]] = bslot;
       }
     }
 
@@ -292,10 +303,67 @@ Value *CodeGen::genNumber(const NumberExpr *e) {
   return ConstantInt::get(toLLVM(e->type), e->intValue, e->type.isSigned);
 }
 
+AllocaInst *CodeGen::entryAlloca(llvm::Type *ty, const std::string &name) {
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock &entry = fn->getEntryBlock();
+  IRBuilder<> tmp(&entry, entry.begin());
+  return tmp.CreateAlloca(ty, nullptr, name);
+}
+
 Value *CodeGen::genVariable(const VariableExpr *e) {
   if (e->variantTag >= 0) // 引数なし enum バリアント
     return genVariant(e->variantEnum, e->variantTag, {});
-  return namedValues_[e->name];
+  // 変数はメモリ常駐 (alloca)。読み出しは load。
+  auto *slot = cast<AllocaInst>(namedValues_[e->name]);
+  return builder_.CreateLoad(slot->getAllocatedType(), slot, e->name);
+}
+
+// 場所のアドレス。変数はその alloca、*p はポインタ値、フィールド/添字は GEP。
+// 上記以外 (一時値) はメモリに退避してそのアドレスを返す。
+Value *CodeGen::genAddr(const Expr *e) {
+  switch (e->kind) {
+  case Expr::Kind::Variable: {
+    auto *v = static_cast<const VariableExpr *>(e);
+    if (v->variantTag < 0) {
+      auto it = namedValues_.find(v->name);
+      if (it != namedValues_.end())
+        return it->second;
+    }
+    break;
+  }
+  case Expr::Kind::Deref:
+    return genExpr(static_cast<const DerefExpr *>(e)->operand.get());
+  case Expr::Kind::Field: {
+    auto *f = static_cast<const FieldExpr *>(e);
+    Value *base = genAddr(f->operand.get());
+    StructType *st = getStructType(f->operand->type.name);
+    return builder_.CreateStructGEP(st, base,
+                                    static_cast<unsigned>(f->fieldIndex),
+                                    "fieldptr");
+  }
+  case Expr::Kind::TupleIndex: {
+    auto *t = static_cast<const TupleIndexExpr *>(e);
+    Value *base = genAddr(t->operand.get());
+    auto *tt = cast<StructType>(toLLVM(t->operand->type));
+    return builder_.CreateStructGEP(tt, base, t->index, "telemptr");
+  }
+  default:
+    break;
+  }
+  // 一時値: メモリに退避
+  Value *v = genExpr(e);
+  AllocaInst *slot = entryAlloca(toLLVM(e->type), "tmp");
+  builder_.CreateStore(v, slot);
+  return slot;
+}
+
+Value *CodeGen::genBorrow(const BorrowExpr *e) {
+  return genAddr(e->operand.get()); // 参照値 = アドレス
+}
+
+Value *CodeGen::genDeref(const DerefExpr *e) {
+  Value *ptr = genExpr(e->operand.get());
+  return builder_.CreateLoad(toLLVM(e->type), ptr, "deref");
 }
 
 Value *CodeGen::genBinary(const BinaryExpr *e) {
@@ -413,8 +481,13 @@ Value *CodeGen::genFor(const ForExpr *e) {
   const kal::Type &vt = e->start->type; // ループ変数の型
   Value *startV = genExpr(e->start.get());
 
+  // ループ変数はメモリ常駐 (アドレスを取れる)
+  AllocaInst *slot = entryAlloca(toLLVM(vt), e->var);
+  builder_.CreateStore(startV, slot);
+  Value *oldVal = namedValues_.count(e->var) ? namedValues_[e->var] : nullptr;
+  namedValues_[e->var] = slot;
+
   Function *fn = builder_.GetInsertBlock()->getParent();
-  BasicBlock *preheaderBB = builder_.GetInsertBlock();
   BasicBlock *condBB = BasicBlock::Create(ctx_, "loopcond", fn);
   BasicBlock *bodyBB = BasicBlock::Create(ctx_, "loopbody", fn);
   BasicBlock *afterBB = BasicBlock::Create(ctx_, "afterloop", fn);
@@ -422,13 +495,7 @@ Value *CodeGen::genFor(const ForExpr *e) {
   builder_.CreateBr(condBB);
 
   builder_.SetInsertPoint(condBB);
-  PHINode *var = builder_.CreatePHI(toLLVM(vt), 2, e->var);
-  var->addIncoming(startV, preheaderBB);
-
-  Value *oldVal = namedValues_.count(e->var) ? namedValues_[e->var] : nullptr;
-  namedValues_[e->var] = var;
-
-  Value *condV = genExpr(e->cond.get()); // i1
+  Value *condV = genExpr(e->cond.get()); // i1 (変数は load される)
   builder_.CreateCondBr(condV, bodyBB, afterBB);
 
   builder_.SetInsertPoint(bodyBB);
@@ -442,11 +509,11 @@ Value *CodeGen::genFor(const ForExpr *e) {
   else
     stepV = ConstantInt::get(toLLVM(vt), 1, vt.isSigned);
 
-  Value *nextVar = vt.isFloat() ? builder_.CreateFAdd(var, stepV, "nextvar")
-                                : builder_.CreateAdd(var, stepV, "nextvar");
-  BasicBlock *bodyEndBB = builder_.GetInsertBlock();
+  Value *cur = builder_.CreateLoad(toLLVM(vt), slot, e->var);
+  Value *nextVar = vt.isFloat() ? builder_.CreateFAdd(cur, stepV, "nextvar")
+                                : builder_.CreateAdd(cur, stepV, "nextvar");
+  builder_.CreateStore(nextVar, slot);
   builder_.CreateBr(condBB);
-  var->addIncoming(nextVar, bodyEndBB);
 
   builder_.SetInsertPoint(afterBB);
 
@@ -480,8 +547,12 @@ bool CodeGen::genFunction(const FunctionDef &f) {
   builder_.SetInsertPoint(bb);
 
   namedValues_.clear();
-  for (auto &arg : fn->args())
-    namedValues_[std::string(arg.getName())] = &arg;
+  // 引数をメモリにコピー (アドレスを取れるように)
+  for (auto &arg : fn->args()) {
+    AllocaInst *slot = entryAlloca(arg.getType(), std::string(arg.getName()));
+    builder_.CreateStore(&arg, slot);
+    namedValues_[std::string(arg.getName())] = slot;
+  }
 
   Value *ret = genExpr(f.body.get());
   if (f.proto->retType.isUnit())

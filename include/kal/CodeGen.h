@@ -42,6 +42,12 @@ private:
   llvm::Value *genTupleIndex(const TupleIndexExpr *e);
   llvm::Value *genLet(const LetExpr *e);
   llvm::Value *genMatch(const MatchExpr *e);
+  llvm::Value *genBorrow(const BorrowExpr *e);
+  llvm::Value *genDeref(const DerefExpr *e);
+  // 場所 (lvalue) のアドレスを返す。一時値はメモリに退避する。
+  llvm::Value *genAddr(const Expr *e);
+  // entry ブロックに alloca を作る (mem2reg が昇格できる)
+  llvm::AllocaInst *entryAlloca(llvm::Type *ty, const std::string &name);
   // enum バリアント構築 (tag + ペイロード)
   llvm::Value *genVariant(const std::string &enumName, int tag,
                           llvm::ArrayRef<llvm::Value *> payload);

@@ -46,6 +46,8 @@ private:
   Type checkTupleIndex(TupleIndexExpr *e);
   Type checkLet(LetExpr *e, std::optional<Type> expected);
   Type checkMatch(MatchExpr *e, std::optional<Type> expected);
+  Type checkBorrow(BorrowExpr *e, std::optional<Type> expected);
+  Type checkDeref(DerefExpr *e);
 
   void checkFunction(FunctionDef &f);
   const StructDef *findStruct(const std::string &name) const;

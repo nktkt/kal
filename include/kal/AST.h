@@ -27,6 +27,8 @@ struct Expr {
     TupleIndex,
     Let,
     Match,
+    Borrow,
+    Deref,
   };
   Kind kind;
   Span span;
@@ -92,11 +94,14 @@ struct TupleIndexExpr : Expr {
         indexSpan(indexSpan) {}
 };
 
-/// ローカル束縛 (不変): `let name = value in body`
+/// ローカル束縛 (不変): `let name = value in body` または
+/// `let name: T = value in body` (型注釈つき)
 struct LetExpr : Expr {
   std::string name;
   ExprPtr value;
   ExprPtr body;
+  Type annotatedType;
+  bool hasAnnotation = false;
   LetExpr(Span s, std::string name, ExprPtr value, ExprPtr body)
       : Expr(Kind::Let, s), name(std::move(name)), value(std::move(value)),
         body(std::move(body)) {}
@@ -121,6 +126,21 @@ struct MatchExpr : Expr {
   std::vector<MatchArm> arms;
   MatchExpr(Span s, ExprPtr scrutinee)
       : Expr(Kind::Match, s), scrutinee(std::move(scrutinee)) {}
+};
+
+/// 借用: `&operand` または `&mut operand`
+struct BorrowExpr : Expr {
+  ExprPtr operand;
+  bool isMut;
+  BorrowExpr(Span s, ExprPtr operand, bool isMut)
+      : Expr(Kind::Borrow, s), operand(std::move(operand)), isMut(isMut) {}
+};
+
+/// 参照外し: `*operand`
+struct DerefExpr : Expr {
+  ExprPtr operand;
+  DerefExpr(Span s, ExprPtr operand)
+      : Expr(Kind::Deref, s), operand(std::move(operand)) {}
 };
 
 struct VariableExpr : Expr {

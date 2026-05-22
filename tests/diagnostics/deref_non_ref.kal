@@ -1,0 +1,2 @@
+# Dereferencing something that is not a reference.
+fn f(n: i64) -> i64 = *n;

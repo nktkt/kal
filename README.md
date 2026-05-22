@@ -70,9 +70,9 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 ## Language reference
 
 ### Types
-`i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), plus
-user-defined **`struct`s**, **`enum`s** (algebraic data types), and **tuples**
-`(T, U, …)`.
+`i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), user-defined
+**`struct`s**, **`enum`s** (algebraic data types), **tuples** `(T, U, …)`, and
+**references** `&T` / `&mut T`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 There are **no implicit conversions** — convert explicitly with `as`.
@@ -156,6 +156,22 @@ A `match` arm is `Variant(bindings) => expr` or a `_` wildcard; it must cover
 every variant (or include `_`). Variant payloads are bound by the names in the
 pattern (`_` ignores one).
 
+### References
+
+```
+fn get(p: &i64) -> i64 = *p;          # &T borrow, *p dereference
+
+let n: i64 = 42 in get(&n);           # => 42   (let supports `: T` annotations)
+
+fn normX(p: &Point) -> f64 = (*p).x;  # pass a struct by reference
+```
+
+`&x` / `&mut x` borrow a place (variable, field, …) as a reference; `*p`
+dereferences. Locals are memory-backed so they're addressable (`-O` promotes
+them back to registers). Borrow checking — move semantics, aliasing rules, and
+lifetimes — is the next phase ([ROADMAP.md](ROADMAP.md) Phase 3); for now
+references are read-only.
+
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
@@ -180,7 +196,7 @@ kal/
 │   ├── Sema.h               #   type checker (annotates the AST)
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

@@ -21,6 +21,7 @@ enum class Tok {
   Let,
   Enum,
   Match,
+  Mut,
   // 主要トークン
   Identifier,
   Number,
@@ -36,6 +37,7 @@ enum class Tok {
   FatArrow, // =>
   Colon,    // :
   Dot,      // .
+  Amp,      // &
   LParen,
   RParen,
   LBrace, // {

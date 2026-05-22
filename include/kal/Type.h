@@ -9,12 +9,15 @@ namespace kal {
 
 /// Kal の型。整数・浮動小数点・bool・unit に加え、struct (公称) と tuple (構造的)。
 struct Type {
-  enum class Kind { Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum };
+  enum class Kind {
+    Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref
+  };
   Kind kind = Kind::Unknown;
   unsigned bits = 0;        // Int: 8/16/32/64, Float: 32/64, Bool: 1
   bool isSigned = true;     // Int のみ
+  bool refMut = false;      // Ref が &mut か
   std::string name;         // Struct / Enum の名前
-  std::vector<Type> elems;  // Tuple の要素型
+  std::vector<Type> elems;  // Tuple の要素型 / Ref の指す型(elems[0])
 
   static Type unknown() { return {}; }
   static Type unit() { return {Kind::Unit, 0, true}; }
@@ -39,6 +42,13 @@ struct Type {
     t.name = std::move(n);
     return t;
   }
+  static Type refTy(Type pointee, bool mut) {
+    Type t;
+    t.kind = Kind::Ref;
+    t.refMut = mut;
+    t.elems.push_back(std::move(pointee));
+    return t;
+  }
 
   bool isInt() const { return kind == Kind::Int; }
   bool isFloat() const { return kind == Kind::Float; }
@@ -47,8 +57,10 @@ struct Type {
   bool isStruct() const { return kind == Kind::Struct; }
   bool isTuple() const { return kind == Kind::Tuple; }
   bool isEnum() const { return kind == Kind::Enum; }
+  bool isRef() const { return kind == Kind::Ref; }
   bool isNumeric() const { return isInt() || isFloat(); }
   bool isKnown() const { return kind != Kind::Unknown; }
+  const Type &pointee() const { return elems[0]; } // Ref のとき有効
 
   bool operator==(const Type &o) const {
     if (kind != o.kind)
@@ -63,6 +75,8 @@ struct Type {
       return name == o.name; // 公称型: 名前で同一性判定
     case Kind::Tuple:
       return elems == o.elems; // 構造的
+    case Kind::Ref:
+      return refMut == o.refMut && elems[0] == o.elems[0];
     default:
       return true;
     }
