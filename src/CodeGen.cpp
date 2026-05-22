@@ -134,8 +134,10 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genTupleLit(static_cast<const TupleLitExpr *>(e));
   case Expr::Kind::TupleIndex:
     return genTupleIndex(static_cast<const TupleIndexExpr *>(e));
-  case Expr::Kind::Let:
-    return genLet(static_cast<const LetExpr *>(e));
+  case Expr::Kind::Block:
+    return genBlock(static_cast<const BlockExpr *>(e));
+  case Expr::Kind::Assign:
+    return genAssign(static_cast<const AssignExpr *>(e));
   case Expr::Kind::Match:
     return genMatch(static_cast<const MatchExpr *>(e));
   case Expr::Kind::Borrow:
@@ -183,18 +185,37 @@ Value *CodeGen::genTupleIndex(const TupleIndexExpr *e) {
   return builder_.CreateExtractValue(v, {e->index}, "telem");
 }
 
-Value *CodeGen::genLet(const LetExpr *e) {
+Value *CodeGen::genBlock(const BlockExpr *e) {
+  std::vector<std::pair<std::string, Value *>> saved; // name, oldSlot(or null)
+  for (auto &st : e->stmts) {
+    if (st.kind == Stmt::Kind::Let) {
+      Value *v = genExpr(st.expr.get());
+      AllocaInst *slot = entryAlloca(toLLVM(st.expr->type), st.name);
+      builder_.CreateStore(v, slot);
+      saved.push_back({st.name, namedValues_.count(st.name)
+                                    ? namedValues_[st.name]
+                                    : nullptr});
+      namedValues_[st.name] = slot;
+    } else {
+      genExpr(st.expr.get()); // 式文: 値は捨てる
+    }
+  }
+  Value *result = e->tail ? genExpr(e->tail.get()) : nullptr;
+  // スコープ復元 (逆順)
+  for (size_t i = saved.size(); i-- > 0;) {
+    if (saved[i].second)
+      namedValues_[saved[i].first] = saved[i].second;
+    else
+      namedValues_.erase(saved[i].first);
+  }
+  return result;
+}
+
+Value *CodeGen::genAssign(const AssignExpr *e) {
+  Value *addr = genAddr(e->target.get());
   Value *v = genExpr(e->value.get());
-  AllocaInst *slot = entryAlloca(toLLVM(e->value->type), e->name);
-  builder_.CreateStore(v, slot);
-  Value *old = namedValues_.count(e->name) ? namedValues_[e->name] : nullptr;
-  namedValues_[e->name] = slot;
-  Value *b = genExpr(e->body.get());
-  if (old)
-    namedValues_[e->name] = old;
-  else
-    namedValues_.erase(e->name);
-  return b;
+  builder_.CreateStore(v, addr);
+  return nullptr; // 代入式は unit
 }
 
 Value *CodeGen::genMatch(const MatchExpr *e) {

@@ -1,0 +1,6 @@
+error[E0172]: &mut で借用するには可変な場所が必要です (let mut が必要)
+ --> tests/diagnostics/mut_borrow_immutable.kal:3:37
+  |
+3 | fn f() -> i64 = { let x: i64 = 1; g(&mut x) };
+  |                                     ^^^^^^
+1 個のエラーで中断しました

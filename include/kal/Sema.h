@@ -44,10 +44,13 @@ private:
   Type checkField(FieldExpr *e);
   Type checkTupleLit(TupleLitExpr *e, std::optional<Type> expected);
   Type checkTupleIndex(TupleIndexExpr *e);
-  Type checkLet(LetExpr *e, std::optional<Type> expected);
   Type checkMatch(MatchExpr *e, std::optional<Type> expected);
   Type checkBorrow(BorrowExpr *e, std::optional<Type> expected);
   Type checkDeref(DerefExpr *e);
+  Type checkBlock(BlockExpr *e, std::optional<Type> expected);
+  Type checkAssign(AssignExpr *e);
+  // 代入先 / &mut で借用できる「可変な場所」か
+  bool isMutablePlace(const Expr *e);
 
   void checkFunction(FunctionDef &f);
   const StructDef *findStruct(const std::string &name) const;
@@ -55,9 +58,14 @@ private:
   // パーサは未知の名前型を Struct 種として作る。enum 名なら Enum 種へ直す。
   Type resolve(Type t) const;
 
+  struct Local {
+    Type type;
+    bool isMut = false;
+  };
+
   DiagnosticEngine &diag_;
   std::map<std::string, FuncSig> funcs_;
-  std::map<std::string, Type> locals_;
+  std::map<std::string, Local> locals_;
   std::map<std::string, const StructDef *> structs_;
   std::map<std::string, const EnumDef *> enums_;
   std::map<std::string, VariantInfo> variants_;

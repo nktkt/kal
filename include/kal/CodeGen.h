@@ -40,7 +40,8 @@ private:
   llvm::Value *genField(const FieldExpr *e);
   llvm::Value *genTupleLit(const TupleLitExpr *e);
   llvm::Value *genTupleIndex(const TupleIndexExpr *e);
-  llvm::Value *genLet(const LetExpr *e);
+  llvm::Value *genBlock(const BlockExpr *e);
+  llvm::Value *genAssign(const AssignExpr *e);
   llvm::Value *genMatch(const MatchExpr *e);
   llvm::Value *genBorrow(const BorrowExpr *e);
   llvm::Value *genDeref(const DerefExpr *e);

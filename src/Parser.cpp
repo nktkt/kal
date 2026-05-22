@@ -305,10 +305,10 @@ ExprPtr Parser::parsePrimary() {
     return parseIfExpr();
   case Tok::For:
     return parseForExpr();
-  case Tok::Let:
-    return parseLetExpr();
   case Tok::Match:
     return parseMatchExpr();
+  case Tok::LBrace:
+    return parseBlock();
   default:
     diag_.error(cur_.span, "E0002", "式が必要です");
     return nullptr;
@@ -382,45 +382,92 @@ ExprPtr Parser::parseUnary() {
   return e;
 }
 
-ExprPtr Parser::parseLetExpr() {
+// ブロック: `{ stmt* tail? }`
+//   stmt = `let [mut] name [: T] = e;`  |  `e;`
+//   tail = 末尾の `;` なし式 (ブロックの値。なければ unit)
+ExprPtr Parser::parseBlock() {
   Span s = cur_.span;
-  advance(); // 'let'
-  if (cur_.kind != Tok::Identifier) {
-    diag_.error(cur_.span, "E0050", "let の後には変数名が必要です");
+  advance(); // '{'
+  bool savedNSL = noStructLit_;
+  noStructLit_ = false; // ブロック内では構造体リテラル可
+  auto blk = std::make_unique<BlockExpr>(s);
+
+  while (cur_.kind != Tok::RBrace && cur_.kind != Tok::Eof) {
+    if (cur_.kind == Tok::Let) {
+      Stmt st;
+      st.kind = Stmt::Kind::Let;
+      st.span = cur_.span;
+      advance(); // 'let'
+      if (cur_.kind == Tok::Mut) {
+        st.isMut = true;
+        advance();
+      }
+      if (cur_.kind != Tok::Identifier) {
+        diag_.error(cur_.span, "E0050", "let の後には変数名が必要です");
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+      st.name = cur_.text;
+      st.nameSpan = cur_.span;
+      advance();
+      if (cur_.kind == Tok::Colon) {
+        advance();
+        if (!parseType(st.annotatedType)) {
+          noStructLit_ = savedNSL;
+          return nullptr;
+        }
+        st.hasAnnotation = true;
+      }
+      if (cur_.kind != Tok::Equal) {
+        diag_.error(cur_.span, "E0051", "let には '=' が必要です");
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+      advance();
+      st.expr = parseExpression();
+      if (!st.expr) {
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+      if (cur_.kind != Tok::Semicolon) {
+        diag_.error(cur_.span, "E0057", "let 文の後には ';' が必要です");
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+      advance();
+      blk->stmts.push_back(std::move(st));
+    } else {
+      auto e = parseExpression();
+      if (!e) {
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+      if (cur_.kind == Tok::Semicolon) {
+        advance();
+        Stmt st;
+        st.kind = Stmt::Kind::Expr;
+        st.span = e->span;
+        st.expr = std::move(e);
+        blk->stmts.push_back(std::move(st));
+      } else if (cur_.kind == Tok::RBrace) {
+        blk->tail = std::move(e); // 末尾式 = ブロックの値
+        break;
+      } else {
+        diag_.error(cur_.span, "E0058", "式の後には ';' か '}' が必要です");
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+    }
+  }
+  noStructLit_ = savedNSL;
+  if (cur_.kind != Tok::RBrace) {
+    diag_.error(cur_.span, "E0059", "ブロックには '}' が必要です");
     return nullptr;
   }
-  std::string name = cur_.text;
-  advance();
-  // 省略可能な型注釈:  let name: T = ...
-  Type annotated;
-  bool hasAnnotation = false;
-  if (cur_.kind == Tok::Colon) {
-    advance();
-    if (!parseType(annotated))
-      return nullptr;
-    hasAnnotation = true;
-  }
-  if (cur_.kind != Tok::Equal) {
-    diag_.error(cur_.span, "E0051", "let には '=' が必要です");
-    return nullptr;
-  }
-  advance();
-  auto value = parseExpression();
-  if (!value)
-    return nullptr;
-  if (cur_.kind != Tok::In) {
-    diag_.error(cur_.span, "E0052", "let には 'in' が必要です");
-    return nullptr;
-  }
-  advance();
-  auto body = parseExpression();
-  if (!body)
-    return nullptr;
-  auto le = std::make_unique<LetExpr>(s, std::move(name), std::move(value),
-                                      std::move(body));
-  le->annotatedType = annotated;
-  le->hasAnnotation = hasAnnotation;
-  return le;
+  Span end = cur_.span;
+  advance(); // '}'
+  blk->span = {s.fileId, s.start, end.end};
+  return blk;
 }
 
 ExprPtr Parser::parseMatchExpr() {
@@ -531,7 +578,21 @@ ExprPtr Parser::parseExpression() {
   auto lhs = parseUnary();
   if (!lhs)
     return nullptr;
-  return parseBinOpRHS(0, std::move(lhs));
+  lhs = parseBinOpRHS(0, std::move(lhs));
+  if (!lhs)
+    return nullptr;
+  // 代入 (最も弱い結合・右結合):  place = value
+  if (cur_.kind == Tok::Equal) {
+    Span eq = cur_.span;
+    advance();
+    auto rhs = parseExpression();
+    if (!rhs)
+      return nullptr;
+    Span full{lhs->span.fileId, lhs->span.start, rhs->span.end};
+    (void)eq;
+    return std::make_unique<AssignExpr>(full, std::move(lhs), std::move(rhs));
+  }
+  return lhs;
 }
 
 std::unique_ptr<Prototype> Parser::parsePrototype() {
@@ -605,12 +666,18 @@ std::unique_ptr<FunctionDef> Parser::parseDefinition() {
   auto proto = parsePrototype();
   if (!proto)
     return nullptr;
-  if (cur_.kind != Tok::Equal) {
-    diag_.error(cur_.span, "E0026", "関数本体の前に '=' が必要です");
-    return nullptr;
+  // 本体は `{ ブロック }` または `= 式;`
+  ExprPtr body;
+  if (cur_.kind == Tok::LBrace) {
+    body = parseBlock();
+  } else {
+    if (cur_.kind != Tok::Equal) {
+      diag_.error(cur_.span, "E0026", "関数本体の前に '=' か '{' が必要です");
+      return nullptr;
+    }
+    advance();
+    body = parseExpression();
   }
-  advance();
-  auto body = parseExpression();
   if (!body)
     return nullptr;
   auto f = std::make_unique<FunctionDef>();

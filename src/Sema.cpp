@@ -120,7 +120,7 @@ bool Sema::run(Program &program) {
 void Sema::checkFunction(FunctionDef &f) {
   locals_.clear();
   for (size_t i = 0; i < f.proto->args.size(); ++i)
-    locals_[f.proto->args[i]] = f.proto->paramTypes[i];
+    locals_[f.proto->args[i]] = {f.proto->paramTypes[i], /*isMut=*/false};
 
   Type bodyT = check(f.body.get(), f.proto->retType);
   if (bodyT.isKnown() && bodyT != f.proto->retType) {
@@ -166,9 +166,6 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
   case Expr::Kind::TupleIndex:
     t = checkTupleIndex(static_cast<TupleIndexExpr *>(e));
     break;
-  case Expr::Kind::Let:
-    t = checkLet(static_cast<LetExpr *>(e), expected);
-    break;
   case Expr::Kind::Match:
     t = checkMatch(static_cast<MatchExpr *>(e), expected);
     break;
@@ -177,6 +174,12 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     break;
   case Expr::Kind::Deref:
     t = checkDeref(static_cast<DerefExpr *>(e));
+    break;
+  case Expr::Kind::Block:
+    t = checkBlock(static_cast<BlockExpr *>(e), expected);
+    break;
+  case Expr::Kind::Assign:
+    t = checkAssign(static_cast<AssignExpr *>(e));
     break;
   }
   e->type = t;
@@ -199,7 +202,7 @@ Type Sema::checkNumber(NumberExpr *e, std::optional<Type> expected) {
 Type Sema::checkVariable(VariableExpr *e) {
   auto it = locals_.find(e->name);
   if (it != locals_.end())
-    return it->second;
+    return it->second.type;
   // ローカルになければ、引数なし enum バリアントかもしれない
   auto vit = variants_.find(e->name);
   if (vit != variants_.end()) {
@@ -312,10 +315,10 @@ Type Sema::checkFor(ForExpr *e) {
   if (st.isKnown() && !st.isNumeric())
     diag_.error(e->start->span, "E0140", "ループの開始値は数値型が必要です");
 
-  // ループ変数をスコープに導入 (同名は退避)
+  // ループ変数をスコープに導入 (同名は退避)。ループ変数は不変。
   bool hadOld = locals_.count(e->var) != 0;
-  Type old = hadOld ? locals_[e->var] : Type();
-  locals_[e->var] = st;
+  Local old = hadOld ? locals_[e->var] : Local();
+  locals_[e->var] = {st, /*isMut=*/false};
 
   Type ct = check(e->cond.get(), Type::boolean());
   if (ct.isKnown() && !ct.isBool())
@@ -441,29 +444,81 @@ Type Sema::checkTupleIndex(TupleIndexExpr *e) {
   return ot.elems[e->index];
 }
 
-Type Sema::checkLet(LetExpr *e, std::optional<Type> expected) {
-  std::optional<Type> hint;
-  if (e->hasAnnotation) {
-    e->annotatedType = resolve(e->annotatedType);
-    hint = e->annotatedType;
+// 代入先 / &mut で借用できる「可変な場所」か判定する。
+bool Sema::isMutablePlace(const Expr *e) {
+  switch (e->kind) {
+  case Expr::Kind::Variable: {
+    auto *v = static_cast<const VariableExpr *>(e);
+    auto it = locals_.find(v->name);
+    return it != locals_.end() && it->second.isMut;
   }
-  Type vt = check(e->value.get(), hint);
-  if (e->hasAnnotation) {
-    if (vt.isKnown() && vt != e->annotatedType)
-      diag_.error(e->value->span, "E0053",
-                  "let の値の型が注釈と一致しません (期待 " +
-                      e->annotatedType.str() + ", 実際 " + vt.str() + ")");
-    vt = e->annotatedType;
+  case Expr::Kind::Deref: {
+    // *p が書けるのは p が &mut のとき
+    auto *d = static_cast<const DerefExpr *>(e);
+    return d->operand->type.isRef() && d->operand->type.refMut;
   }
-  bool hadOld = locals_.count(e->name) != 0;
-  Type old = hadOld ? locals_[e->name] : Type();
-  locals_[e->name] = vt;
-  Type bt = check(e->body.get(), expected);
-  if (hadOld)
-    locals_[e->name] = old;
-  else
-    locals_.erase(e->name);
-  return bt;
+  case Expr::Kind::Field:
+    return isMutablePlace(static_cast<const FieldExpr *>(e)->operand.get());
+  case Expr::Kind::TupleIndex:
+    return isMutablePlace(static_cast<const TupleIndexExpr *>(e)->operand.get());
+  default:
+    return false;
+  }
+}
+
+Type Sema::checkBlock(BlockExpr *e, std::optional<Type> expected) {
+  // ブロックは新しいスコープ。導入した束縛を末尾で復元する。
+  std::vector<std::pair<std::string, bool>> introduced; // name, hadOld
+  std::vector<Local> savedLocals;
+
+  for (auto &st : e->stmts) {
+    if (st.kind == Stmt::Kind::Let) {
+      std::optional<Type> hint;
+      if (st.hasAnnotation) {
+        st.annotatedType = resolve(st.annotatedType);
+        hint = st.annotatedType;
+      }
+      Type vt = check(st.expr.get(), hint);
+      if (st.hasAnnotation) {
+        if (vt.isKnown() && vt != st.annotatedType)
+          diag_.error(st.expr->span, "E0053",
+                      "let の値の型が注釈と一致しません (期待 " +
+                          st.annotatedType.str() + ", 実際 " + vt.str() + ")");
+        vt = st.annotatedType;
+      }
+      introduced.push_back({st.name, locals_.count(st.name) != 0});
+      savedLocals.push_back(introduced.back().second ? locals_[st.name]
+                                                     : Local());
+      locals_[st.name] = {vt, st.isMut};
+    } else {
+      check(st.expr.get(), std::nullopt); // 式文: 値は捨てる
+    }
+  }
+
+  Type result = e->tail ? check(e->tail.get(), expected) : Type::unit();
+
+  // スコープ復元 (逆順)
+  for (size_t i = introduced.size(); i-- > 0;) {
+    if (introduced[i].second)
+      locals_[introduced[i].first] = savedLocals[i];
+    else
+      locals_.erase(introduced[i].first);
+  }
+  return result;
+}
+
+Type Sema::checkAssign(AssignExpr *e) {
+  Type tt = check(e->target.get(), std::nullopt);
+  Type vt = check(e->value.get(), tt.isKnown() ? std::optional<Type>(tt)
+                                               : std::nullopt);
+  if (!isMutablePlace(e->target.get()))
+    diag_.error(e->target->span, "E0170",
+                "可変でない場所には代入できません (let mut / &mut が必要)");
+  if (tt.isKnown() && vt.isKnown() && tt != vt)
+    diag_.error(e->span, "E0171",
+                "代入の型が一致しません (左辺 " + tt.str() + ", 右辺 " + vt.str() +
+                    ")");
+  return Type::unit();
 }
 
 Type Sema::checkBorrow(BorrowExpr *e, std::optional<Type> expected) {
@@ -472,6 +527,9 @@ Type Sema::checkBorrow(BorrowExpr *e, std::optional<Type> expected) {
   if (expected && expected->isRef())
     hint = expected->pointee();
   Type t = check(e->operand.get(), hint);
+  if (e->isMut && !isMutablePlace(e->operand.get()))
+    diag_.error(e->span, "E0172",
+                "&mut で借用するには可変な場所が必要です (let mut が必要)");
   return Type::refTy(t, e->isMut);
 }
 
@@ -543,19 +601,19 @@ Type Sema::checkMatch(MatchExpr *e, std::optional<Type> expected) {
           binds.push_back({arm.bindings[i], v.payloadTypes[i]});
     }
 
-    // 束縛をスコープに入れて本体を検査
+    // 束縛をスコープに入れて本体を検査 (束縛は不変)
     std::vector<bool> hadOld;
-    std::vector<Type> oldTypes;
+    std::vector<Local> oldLocals;
     for (auto &b : binds) {
       hadOld.push_back(locals_.count(b.first) != 0);
-      oldTypes.push_back(hadOld.back() ? locals_[b.first] : Type());
-      locals_[b.first] = b.second;
+      oldLocals.push_back(hadOld.back() ? locals_[b.first] : Local());
+      locals_[b.first] = {b.second, /*isMut=*/false};
     }
     Type bt =
         check(arm.body.get(), haveResult ? std::optional<Type>(result) : expected);
     for (size_t i = 0; i < binds.size(); ++i) {
       if (hadOld[i])
-        locals_[binds[i].first] = oldTypes[i];
+        locals_[binds[i].first] = oldLocals[i];
       else
         locals_.erase(binds[i].first);
     }

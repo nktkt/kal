@@ -1,0 +1,3 @@
+# Taking &mut of a binding that is not `mut`.
+fn g(p: &mut i64) -> i64 = *p;
+fn f() -> i64 = { let x: i64 = 1; g(&mut x) };

@@ -1,17 +1,17 @@
-# 構造体・タプル・let による局所束縛
+# 構造体・タプル・ブロックによる局所束縛
 
 struct Point { x: f64, y: f64 }
 
 # 構造体を引数に取り、フィールドにアクセスする
 fn norm2(p: Point) -> f64 = p.x * p.x + p.y * p.y;
 
-let p = Point { x: 3.0, y: 4.0 } in norm2(p);   # => 25
+{ let p = Point { x: 3.0, y: 4.0 }; norm2(p) };   # => 25
 
 # 構造体を返す関数 + メソッドチェーン風アクセス
 fn scale(p: Point, k: f64) -> Point =
   Point { x: p.x * k, y: p.y * k };
 
-scale(Point { x: 1.0, y: 2.0 }, 10.0).y;        # => 20
+scale(Point { x: 1.0, y: 2.0 }, 10.0).y;          # => 20
 
 # タプルと添字アクセス (.0 / .1)
-let pair = (6, 7) in pair.0 * pair.1;           # => 42
+{ let pair = (6, 7); pair.0 * pair.1 };           # => 42

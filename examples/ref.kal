@@ -1,18 +1,18 @@
 # 参照: &T (共有) と &mut T、借用 &x、参照外し *p
-# (借用チェックは次フェーズ。今は型と読み取りのみ)
+# (借用チェックは次フェーズ。今は型・可変性・読み取りのみ)
 
 fn get(p: &i64) -> i64 = *p;
 
-let n: i64 = 42 in get(&n);                       # => 42
+{ let n: i64 = 42; get(&n) };                      # => 42
 
 # 構造体への参照 (値コピーを避けて渡す)
 struct Point { x: f64, y: f64 }
 
 fn normX(p: &Point) -> f64 = (*p).x;
 
-let pt = Point { x: 3.0, y: 4.0 } in normX(&pt);  # => 3
+{ let pt = Point { x: 3.0, y: 4.0 }; normX(&pt) }; # => 3
 
-# &mut 参照 (現状は読み取りのみ)
+# &mut 参照 (借用元は let mut が必要)
 fn read(p: &mut i64) -> i64 = *p + 1;
 
-let m: i64 = 100 in read(&mut m);                 # => 101
+{ let mut m: i64 = 100; read(&mut m) };            # => 101

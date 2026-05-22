@@ -1,0 +1,2 @@
+# Assigning to a binding that was not declared `mut`.
+fn f() -> i64 = { let x = 1; x = 2; x };

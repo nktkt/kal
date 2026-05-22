@@ -112,11 +112,14 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 #### Phase 3 — Ownership & borrow checking · **XL** · → v0.5 *(the differentiator)*
 - **Reference foundation · ✅ done (pre-step):** `&T` / `&mut T` types, `&`/`&mut`
   borrows, `*p` dereference, pass-by-reference, and `let name: T = …` annotations.
-  Locals are now memory-backed (alloca) so they're addressable; `-O` re-promotes
-  them. References are currently *read-only and unchecked*.
-- Move semantics; `Copy` vs move; affine types.
-- Mutation through `&mut` and assignment; aliasing rules.
-- **Borrow checker** on MIR; start with NLL-style (non-lexical) regions.
+  Locals are memory-backed (alloca) so they're addressable; `-O` re-promotes them.
+- **Blocks & mutation · ✅ done:** block expressions `{ stmt; …; tail }`,
+  `let` / `let mut` statements, assignment `place = value`, `*p = e` through
+  `&mut`, block-bodied functions `fn f() { … }`. Mutability is checked (no
+  assigning to / `&mut`-borrowing a non-`mut` place). Replaced `let … in`.
+- Move semantics; `Copy` vs move; affine types. *(next)*
+- **Borrow checker** on MIR; start with NLL-style (non-lexical) regions: aliasing
+  rules (one `&mut` xor many `&`), no dangling, use-after-move. *(next)*
 - `Drop` / RAII / deterministic destruction.
 - `unsafe` blocks with documented invariants.
 - *Exit:* memory-safe **without GC**; use-after-move, double-free, and aliasing violations are compile errors.

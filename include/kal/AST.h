@@ -25,10 +25,11 @@ struct Expr {
     Field,
     TupleLit,
     TupleIndex,
-    Let,
     Match,
     Borrow,
     Deref,
+    Block,
+    Assign,
   };
   Kind kind;
   Span span;
@@ -94,17 +95,36 @@ struct TupleIndexExpr : Expr {
         indexSpan(indexSpan) {}
 };
 
-/// ローカル束縛 (不変): `let name = value in body` または
-/// `let name: T = value in body` (型注釈つき)
-struct LetExpr : Expr {
+/// ブロック内の文。
+///   Let : `let [mut] name [: T] = init;`
+///   Expr: `expr;`
+struct Stmt {
+  enum class Kind { Let, Expr } kind;
+  Span span;
+  // Let 用:
   std::string name;
-  ExprPtr value;
-  ExprPtr body;
+  bool isMut = false;
   Type annotatedType;
   bool hasAnnotation = false;
-  LetExpr(Span s, std::string name, ExprPtr value, ExprPtr body)
-      : Expr(Kind::Let, s), name(std::move(name)), value(std::move(value)),
-        body(std::move(body)) {}
+  Span nameSpan;
+  // Let の init / Expr の式
+  ExprPtr expr;
+};
+
+/// ブロック式: `{ stmt* tail? }` (tail なしなら unit)
+struct BlockExpr : Expr {
+  std::vector<Stmt> stmts;
+  ExprPtr tail;
+  BlockExpr(Span s) : Expr(Kind::Block, s) {}
+};
+
+/// 代入式 (値は unit): `target = value`
+struct AssignExpr : Expr {
+  ExprPtr target;
+  ExprPtr value;
+  AssignExpr(Span s, ExprPtr target, ExprPtr value)
+      : Expr(Kind::Assign, s), target(std::move(target)),
+        value(std::move(value)) {}
 };
 
 /// match の 1 アーム:  `Variant(b1, b2) => body`  または  `_ => body`

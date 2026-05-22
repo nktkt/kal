@@ -120,20 +120,35 @@ for i = start, cond, step in body   # while cond (bool) holds; i += step each it
 for i = 1, i < 6, 1 in printi(i as i64);   # 1 2 3 4 5  (step defaults to 1)
 ```
 
-### Structs, tuples & let
+### Structs & tuples
 
 ```
 struct Point { x: f64, y: f64 }     # nominal product type
 
 fn norm2(p: Point) -> f64 = p.x * p.x + p.y * p.y;   # `.field` access
 
-let p = Point { x: 3.0, y: 4.0 } in norm2(p);   # => 25   (let ... in expression)
-
-let pair = (6, 7) in pair.0 * pair.1;           # => 42   (tuple + .0/.1)
+Point { x: 3.0, y: 4.0 }.x;         # => 3
+(6, 7).0 * (6, 7).1;                # => 42   (tuple + .0/.1)
 ```
 
-Structs and tuples are value types (passed/returned by value). `let name = e in
-body` binds an immutable local for `body`.
+Structs and tuples are value types (passed/returned by value).
+
+### Blocks, `let` & mutation
+
+```
+fn triangle(n: i32) -> i32 = {     # a block { stmts; tail } is an expression
+  let mut s = 0;                    # let / let mut bindings
+  for i = 1, i < n, 1 in {
+    s = s + i;                      # assignment (s must be `mut`)
+  };
+  s                                 # trailing expression is the block's value
+};
+```
+
+A block `{ stmt; …; tail }` runs statements and evaluates to its trailing
+expression (or `()` if absent). `let x = e;` / `let mut x = e;` introduce locals
+(`: T` annotation optional). Assignment `place = value` requires a `mut` binding
+or a `&mut` reference. A function body may be `= expr;` or a block `{ … }`.
 
 ### Enums & pattern matching
 
@@ -160,17 +175,18 @@ pattern (`_` ignores one).
 
 ```
 fn get(p: &i64) -> i64 = *p;          # &T borrow, *p dereference
+fn incr(p: &mut i64) = { *p = *p + 1; };   # mutate through &mut
 
-let n: i64 = 42 in get(&n);           # => 42   (let supports `: T` annotations)
-
-fn normX(p: &Point) -> f64 = (*p).x;  # pass a struct by reference
+{ let mut x: i64 = 41; incr(&mut x); x };  # => 42
 ```
 
 `&x` / `&mut x` borrow a place (variable, field, …) as a reference; `*p`
-dereferences. Locals are memory-backed so they're addressable (`-O` promotes
-them back to registers). Borrow checking — move semantics, aliasing rules, and
-lifetimes — is the next phase ([ROADMAP.md](ROADMAP.md) Phase 3); for now
-references are read-only.
+dereferences and `*p = e` writes through a `&mut`. Locals are memory-backed so
+they're addressable (`-O` promotes
+them back to registers). Mutability is checked (assigning to a non-`mut` binding,
+or `&mut` of one, is an error). The full borrow checker — move semantics,
+aliasing rules, and lifetimes — is the rest of Phase 3
+([ROADMAP.md](ROADMAP.md)); references are not yet aliasing-checked.
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
@@ -196,7 +212,7 @@ kal/
 │   ├── Sema.h               #   type checker (annotates the AST)
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

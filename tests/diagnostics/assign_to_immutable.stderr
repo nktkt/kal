@@ -1,0 +1,11 @@
+error[E0170]: 可変でない場所には代入できません (let mut / &mut が必要)
+ --> tests/diagnostics/assign_to_immutable.kal:2:30
+  |
+2 | fn f() -> i64 = { let x = 1; x = 2; x };
+  |                              ^
+error[E0110]: 戻り値の型が一致しません (期待 i64, 実際 i32)
+ --> tests/diagnostics/assign_to_immutable.kal:2:17
+  |
+2 | fn f() -> i64 = { let x = 1; x = 2; x };
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^
+2 個のエラーで中断しました
