@@ -5,12 +5,17 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Drop / RAII:** owned heap (`Box`) is now **freed automatically** when it goes
+  out of scope — at block end, function end, and on early `return`/`?`. Moved-out
+  values aren't dropped (tracked with per-local drop flags, so conditional moves
+  are handled), and drop glue recurses into structs/enums/tuples/arrays. Verified
+  with `leaks` (0 leaked bytes) and malloc guards (no double-free). Matching a
+  *reference* to an enum now rejects binding non-`Copy` payloads by value
+  (`E0246`), since moving out of a borrow would double-free.
 - **`Box<T>` (heap):** `box(e)` allocates `e` on the heap and returns a
   `Box<T>` (an owned pointer); `*b` reads it. Because a `Box` is a pointer,
   **recursive types** are now expressible (`enum List<T> { Cons(T, Box<List<T>>),
-  Nil }`) — by-value recursion is still rejected. **Note:** boxes are not freed
-  yet (they leak); reclamation (Drop/RAII) is the next step. Leaking is
-  memory-*safe* (no double-free / use-after-free).
+  Nil }`) — by-value recursion is still rejected.
 - **Early return & `?`:** `return e;` (and `return;`) exits a function early; the
   `?` operator on an `Option`/`Result` unwraps the success value or early-returns
   the `None`/`Err` (the error type must match the function's). `if cond then e`

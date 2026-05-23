@@ -224,7 +224,11 @@ area(Circle(2.0));      # => 12.56   (variants are constructed by name)
 
 A `match` arm is `Variant(bindings) => expr` or a `_` wildcard; it must cover
 every variant (or include `_`). Variant payloads are bound by the names in the
-pattern (`_` ignores one).
+pattern (`_` ignores one). Matching a *reference* to an enum (`match &e`, or
+`match self` in a `&self`/`&mut self` method) only borrows it, so its bindings
+borrow too — you may bind `Copy` payloads but **not** non-`Copy` ones (moving
+out of a borrow would double-free); use a `_` or read fields through the binding
+instead.
 
 ### Generics & `Option` / `Result`
 
@@ -388,9 +392,11 @@ fn sum(l: List<i64>) -> i64 =
 sum(Cons(10, box(Cons(20, box(Nil)))));      # => 30
 ```
 
-> **Note:** boxes are not freed yet — they leak. Reclamation (Drop/RAII) is the
-> next step on the [roadmap](ROADMAP.md). Leaking is memory-*safe* (no
-> double-free or use-after-free); it just doesn't reclaim memory.
+A box is **freed automatically** when its owner goes out of scope (Drop/RAII) —
+at block end, function end, or an early `return`/`?`. A value that was moved out
+isn't dropped (tracked per-local, so conditional moves are handled), and the drop
+recurses into structs/enums/tuples/arrays. So the list above frees every node
+with no leak and no double-free.
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line

@@ -121,6 +121,25 @@ bool Sema::hasNonActiveParam(const Type &t) const {
   return false;
 }
 
+// Copy 型か (MoveCheck::isCopy と同じ規則)。参照マッチの束縛可否判定に使う。
+static bool isCopyType(const Type &t) {
+  switch (t.kind) {
+  case Type::Kind::Int:
+  case Type::Kind::Float:
+  case Type::Kind::Bool:
+  case Type::Kind::Unit:
+  case Type::Kind::Unknown:
+    return true;
+  case Type::Kind::Ref:
+  case Type::Kind::Slice:
+    return !t.refMut;
+  case Type::Kind::Array:
+    return isCopyType(t.elems[0]);
+  default:
+    return false; // Struct/Enum/Tuple/Box/Param は move
+  }
+}
+
 // 型 t が「値として」含む struct/enum 名を集める (無限サイズ検出用)。
 // 参照・スライスはポインタなので連鎖を断ち切る。型引数は保守的に値とみなす。
 static void collectValueDeps(const Type &t, std::set<std::string> &out) {
@@ -1552,8 +1571,17 @@ Type Sema::checkMatch(MatchExpr *e, std::optional<Type> expected) {
                         std::to_string(pts.size()) + ", 実際 " +
                         std::to_string(arm.bindings.size()) + ")");
       for (size_t i = 0; i < arm.bindings.size() && i < pts.size(); ++i)
-        if (arm.bindings[i] != "_")
+        if (arm.bindings[i] != "_") {
+          // 参照マッチ (&E / &self) では enum を借用しているだけなので、
+          // 非 Copy のペイロードを値として束縛すると所有権が二重になり
+          // 二重解放を招く。借用マッチでは Copy 型のみ束縛を許す。
+          if (rt.isRef() && !isCopyType(pts[i]))
+            diag_.error(arm.variantSpan, "E0246",
+                        "参照マッチでは非 Copy のペイロード '" +
+                            arm.bindings[i] + ": " + pts[i].str() +
+                            "' を束縛できません (借用した値の所有権は奪えません)");
           binds.push_back({arm.bindings[i], pts[i]});
+        }
     }
 
     // 束縛をスコープに入れて本体を検査 (束縛は不変)

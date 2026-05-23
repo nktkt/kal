@@ -80,6 +80,7 @@ void MoveCheck::use(const Expr *e) {
         diag_.error(e->span, "E0180", "ムーブ済みの値を使用しています");
     } else {
       moveVar(v->name, e->span);
+      const_cast<VariableExpr *>(v)->movesValue = true; // ドロップフラグ降下用
     }
     return;
   }
@@ -181,8 +182,9 @@ void MoveCheck::use(const Expr *e) {
     auto *d = static_cast<const DerefExpr *>(e);
     if (d->operand->type.isBox() && !isCopy(e->type)) {
       // 箱の中身を非 Copy でムーブ取り出し = 箱ごと消費する (Rust の *box と同じ)。
-      // これで同じ中身の二重取り出し (Drop 実装時の二重解放) を防ぐ。
+      // これで同じ中身の二重取り出し (二重解放) を防ぐ。CodeGen は箱を free する。
       use(d->operand.get());
+      const_cast<DerefExpr *>(d)->movesOutOfBox = true;
     } else {
       requireLive(d->operand.get());
       if (!d->operand->type.isBox() && !isCopy(e->type))

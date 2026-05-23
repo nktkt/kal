@@ -1,0 +1,6 @@
+error[E0246]: 参照マッチでは非 Copy のペイロード 'x: Box<i64>' を束縛できません (借用した値の所有権は奪えません)
+ --> tests/diagnostics/refmatch_noncopy_bind.kal:6:40
+  |
+6 |   fn peek(&self) -> i64 = match self { Som(x) => *x, Non => -1 };
+  |                                        ^^^
+1 個のエラーで中断しました

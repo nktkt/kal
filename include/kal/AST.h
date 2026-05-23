@@ -173,6 +173,8 @@ struct BorrowExpr : Expr {
 /// 参照外し: `*operand`
 struct DerefExpr : Expr {
   ExprPtr operand;
+  // MoveCheck が、これが Box の中身をムーブ取り出しする (= 箱を free する) なら設定
+  bool movesOutOfBox = false;
   DerefExpr(Span s, ExprPtr operand)
       : Expr(Kind::Deref, s), operand(std::move(operand)) {}
 };
@@ -239,6 +241,8 @@ struct VariableExpr : Expr {
   // Sema が、これが引数なしの enum バリアントなら設定する
   int variantTag = -1;
   std::string variantEnum;
+  // MoveCheck が、この使用が値をムーブする (= ドロップフラグを下ろす) なら設定する
+  bool movesValue = false;
   VariableExpr(Span s, std::string n)
       : Expr(Kind::Variable, s), name(std::move(n)) {}
 };

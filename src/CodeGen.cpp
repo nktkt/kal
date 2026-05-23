@@ -34,6 +34,64 @@ static kal::Type substType(const kal::Type &t,
   return r;
 }
 
+// 具体型ごとの型引数置換マップ (struct/enum のフィールド/ペイロード解決用)。
+static std::map<std::string, kal::Type>
+instSubst(const std::vector<std::string> &params,
+          const std::vector<kal::Type> &args) {
+  std::map<std::string, kal::Type> s;
+  for (size_t i = 0; i < params.size() && i < args.size(); ++i)
+    s[params[i]] = args[i];
+  return s;
+}
+
+// 値として Box を含む (= スコープ離脱で解放が要る) 型か。
+bool CodeGen::needsDrop(const kal::Type &t) {
+  switch (t.kind) {
+  case kal::Type::Kind::Box:
+    return true; // Box 自身 (再帰せず即 true → 無限再帰しない)
+  case kal::Type::Kind::Tuple:
+  case kal::Type::Kind::Array:
+    for (auto &e : t.elems)
+      if (needsDrop(e))
+        return true;
+    return false;
+  case kal::Type::Kind::Struct: {
+    const StructDef *sd = structDefs_[t.name];
+    auto sub = instSubst(sd->typeParams, t.elems);
+    for (auto &f : sd->fields)
+      if (needsDrop(substType(f.type, sub)))
+        return true;
+    return false;
+  }
+  case kal::Type::Kind::Enum: {
+    const EnumDef *ed = enumDefs_[t.name];
+    auto sub = instSubst(ed->typeParams, t.elems);
+    for (auto &v : ed->variants)
+      for (auto &pt : v.payloadTypes)
+        if (needsDrop(substType(pt, sub)))
+          return true;
+    return false;
+  }
+  default:
+    return false; // Ref/Slice/数値/Param 等は所有しない
+  }
+}
+
+// 型 t のドロップグルー関数 void drop_<t>(ptr)。未生成なら宣言してキューへ。
+llvm::Function *CodeGen::getDropFn(const kal::Type &t) {
+  std::string mangled = "drop$" + t.str();
+  auto it = dropFns_.find(mangled);
+  if (it != dropFns_.end())
+    return it->second;
+  FunctionType *ft = FunctionType::get(llvm::Type::getVoidTy(ctx_),
+                                       {PointerType::getUnqual(ctx_)}, false);
+  Function *fn =
+      Function::Create(ft, Function::InternalLinkage, mangled, module_.get());
+  dropFns_[mangled] = fn;
+  pendingDropFns_.push_back({t, fn}); // 本体は後で生成 (再帰型対応)
+  return fn;
+}
+
 llvm::Type *CodeGen::toLLVM(const kal::Type &rawT) {
   // ジェネリック単態化中なら型引数 (Param) を具体型へ置換する
   kal::Type t = typeSubst_.empty() ? rawT : substType(rawT, typeSubst_);
@@ -282,6 +340,7 @@ Value *CodeGen::genIndex(const IndexExpr *e) {
 
 Value *CodeGen::genBlock(const BlockExpr *e) {
   std::vector<std::pair<std::string, Value *>> saved; // name, oldSlot(or null)
+  dropScopes_.push_back({});                          // ブロックのドロップスコープ
   for (auto &st : e->stmts) {
     if (st.kind == Stmt::Kind::Let) {
       Value *v = genExpr(st.expr.get());
@@ -293,6 +352,7 @@ Value *CodeGen::genBlock(const BlockExpr *e) {
                                     ? namedValues_[st.name]
                                     : nullptr});
       namedValues_[st.name] = slot;
+      registerLocal(slot, st.expr->type); // ドロップ対象なら登録
     } else {
       genExpr(st.expr.get()); // 式文: 値は捨てる
       if (blockDone())
@@ -301,6 +361,7 @@ Value *CodeGen::genBlock(const BlockExpr *e) {
   }
   Value *result =
       (!blockDone() && e->tail) ? genExpr(e->tail.get()) : nullptr;
+  popDropScope(); // ブロック内ローカルを drop (発散済みなら return が drop 済み)
   // スコープ復元 (逆順)
   for (size_t i = saved.size(); i-- > 0;) {
     if (saved[i].second)
@@ -377,6 +438,7 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
   for (size_t a = 0; a < e->arms.size(); ++a) {
     const MatchArm &arm = e->arms[a];
     builder_.SetInsertPoint(armBBs[a]);
+    dropScopes_.push_back({}); // アームのドロップスコープ (束縛の解放用)
 
     // ペイロードを束縛 (退避して復元)
     std::vector<std::string> boundNames;
@@ -400,10 +462,12 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
                               ? namedValues_[arm.bindings[i]]
                               : nullptr);
         namedValues_[arm.bindings[i]] = bslot;
+        registerLocal(bslot, arm.payloadTypes[i]); // ドロップ対象なら登録
       }
     }
 
     Value *bv = genExpr(arm.body.get());
+    popDropScope(); // 束縛を drop (発散済みなら return が drop 済み)
 
     for (size_t i = 0; i < boundNames.size(); ++i) {
       if (oldVals[i])
@@ -476,7 +540,14 @@ Value *CodeGen::genVariable(const VariableExpr *e) {
     return genVariant(e->type, e->variantTag, {});
   // 変数はメモリ常駐 (alloca)。読み出しは load。
   auto *slot = cast<AllocaInst>(namedValues_[e->name]);
-  return builder_.CreateLoad(slot->getAllocatedType(), slot, e->name);
+  Value *val = builder_.CreateLoad(slot->getAllocatedType(), slot, e->name);
+  // ムーブする使用なら、この変数のドロップフラグを下ろす (二重 drop 防止)。
+  if (e->movesValue)
+    for (auto &scope : dropScopes_)
+      for (auto &d : scope)
+        if (d.slot == slot)
+          builder_.CreateStore(builder_.getInt1(false), d.flag);
+  return val;
 }
 
 // 場所のアドレス。変数はその alloca、*p はポインタ値、フィールド/添字は GEP。
@@ -569,7 +640,11 @@ Value *CodeGen::genDeref(const DerefExpr *e) {
   Value *ptr = genExpr(e->operand.get());
   if (blockDone())
     return nullptr;
-  return builder_.CreateLoad(toLLVM(e->type), ptr, "deref");
+  Value *val = builder_.CreateLoad(toLLVM(e->type), ptr, "deref");
+  // 箱の中身をムーブ取り出しした場合は、箱のヒープを解放する。
+  if (e->movesOutOfBox)
+    builder_.CreateCall(module_->getFunction("free"), {ptr});
+  return val;
 }
 
 Value *CodeGen::genBinary(const BinaryExpr *e) {
@@ -748,6 +823,137 @@ Value *CodeGen::genMethodCall(const MethodCallExpr *e) {
   return call;
 }
 
+// ドロップグルー drop_<t>(ptr p): p が指す値 (型 t) を解放する。
+void CodeGen::genDropBody(const kal::Type &t, llvm::Function *fn) {
+  builder_.SetInsertPoint(BasicBlock::Create(ctx_, "entry", fn));
+  Value *p = fn->getArg(0);
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+
+  if (t.isBox()) {
+    // 中身を drop してからヒープを free する
+    Value *bp = builder_.CreateLoad(PointerType::getUnqual(ctx_), p, "boxptr");
+    if (needsDrop(t.boxedType()))
+      builder_.CreateCall(getDropFn(t.boxedType()), {bp});
+    builder_.CreateCall(module_->getFunction("free"), {bp});
+  } else if (t.isTuple() || t.isArray()) {
+    llvm::Type *aggTy = toLLVM(t);
+    size_t n = t.isArray() ? t.arrayLen : t.elems.size();
+    for (size_t i = 0; i < n; ++i) {
+      const kal::Type &et = t.isArray() ? t.elems[0] : t.elems[i];
+      if (!needsDrop(et))
+        continue;
+      Value *ep =
+          t.isArray()
+              ? builder_.CreateGEP(aggTy, p,
+                                   {ConstantInt::get(i64, 0),
+                                    ConstantInt::get(i64, i)}, "elemptr")
+              : builder_.CreateStructGEP(cast<StructType>(aggTy), p,
+                                         static_cast<unsigned>(i), "telemptr");
+      builder_.CreateCall(getDropFn(et), {ep});
+    }
+  } else if (t.isStruct()) {
+    const StructDef *sd = structDefs_[t.name];
+    auto sub = instSubst(sd->typeParams, t.elems);
+    StructType *st = getStructType(t);
+    for (size_t i = 0; i < sd->fields.size(); ++i) {
+      kal::Type ft = substType(sd->fields[i].type, sub);
+      if (!needsDrop(ft))
+        continue;
+      Value *fp =
+          builder_.CreateStructGEP(st, p, static_cast<unsigned>(i), "fieldptr");
+      builder_.CreateCall(getDropFn(ft), {fp});
+    }
+  } else if (t.isEnum()) {
+    const EnumDef *ed = enumDefs_[t.name];
+    auto sub = instSubst(ed->typeParams, t.elems);
+    StructType *et = getEnumType(t);
+    Value *tag = builder_.CreateLoad(
+        i64, builder_.CreateStructGEP(et, p, 0, "tagptr"), "tag");
+    Value *payPtr = builder_.CreateStructGEP(et, p, 1, "payptr");
+    BasicBlock *endBB = BasicBlock::Create(ctx_, "dropend", fn);
+    // ペイロードに drop が要るバリアントごとに分岐して中身を drop
+    std::vector<std::pair<int, BasicBlock *>> cases;
+    for (size_t v = 0; v < ed->variants.size(); ++v) {
+      bool any = false;
+      for (auto &pt : ed->variants[v].payloadTypes)
+        if (needsDrop(substType(pt, sub)))
+          any = true;
+      if (!any)
+        continue;
+      BasicBlock *bb = BasicBlock::Create(ctx_, "dropvar", fn);
+      cases.push_back({static_cast<int>(v), bb});
+      builder_.SetInsertPoint(bb);
+      std::vector<llvm::Type *> fts;
+      for (auto &pt : ed->variants[v].payloadTypes)
+        fts.push_back(toLLVM(substType(pt, sub)));
+      StructType *vs = StructType::get(ctx_, fts);
+      for (size_t j = 0; j < ed->variants[v].payloadTypes.size(); ++j) {
+        kal::Type pt = substType(ed->variants[v].payloadTypes[j], sub);
+        if (!needsDrop(pt))
+          continue;
+        Value *fp = builder_.CreateStructGEP(vs, payPtr,
+                                             static_cast<unsigned>(j), "pf");
+        builder_.CreateCall(getDropFn(pt), {fp});
+      }
+      builder_.CreateBr(endBB);
+    }
+    // entry に switch を張る (どこにも該当しなければ end へ)
+    Function *cur = fn;
+    builder_.SetInsertPoint(&cur->getEntryBlock());
+    SwitchInst *sw = builder_.CreateSwitch(tag, endBB, cases.size());
+    for (auto &c : cases)
+      sw->addCase(builder_.getInt64(c.first), c.second);
+    builder_.SetInsertPoint(endBB);
+  }
+
+  builder_.CreateRetVoid();
+  verifyFunction(*fn);
+}
+
+// ドロップ対象なら i1 フラグ (初期 true) を作って現スコープに登録する。
+void CodeGen::registerLocal(llvm::Value *slot, const kal::Type &rawT) {
+  if (dropScopes_.empty())
+    return;
+  kal::Type t = typeSubst_.empty() ? rawT : substType(rawT, typeSubst_);
+  if (!needsDrop(t))
+    return;
+  Value *flag = entryAlloca(llvm::Type::getInt1Ty(ctx_), "live");
+  builder_.CreateStore(builder_.getInt1(true), flag);
+  dropScopes_.back().push_back({slot, flag, t});
+}
+
+// flag が立っていれば slot の値を drop する。
+void CodeGen::emitDrop(llvm::Value *slot, llvm::Value *flag, const kal::Type &t) {
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock *doBB = BasicBlock::Create(ctx_, "drop.do", fn);
+  BasicBlock *contBB = BasicBlock::Create(ctx_, "drop.cont", fn);
+  Value *live = builder_.CreateLoad(llvm::Type::getInt1Ty(ctx_), flag, "islive");
+  builder_.CreateCondBr(live, doBB, contBB);
+  builder_.SetInsertPoint(doBB);
+  builder_.CreateCall(getDropFn(t), {slot});
+  builder_.CreateStore(builder_.getInt1(false), flag); // 二重 drop 防止
+  builder_.CreateBr(contBB);
+  builder_.SetInsertPoint(contBB);
+}
+
+void CodeGen::popDropScope() {
+  if (dropScopes_.empty())
+    return;
+  auto scope = std::move(dropScopes_.back());
+  dropScopes_.pop_back();
+  if (blockDone())
+    return; // 既に発散 (return がスコープを drop 済み)
+  for (auto it = scope.rbegin(); it != scope.rend(); ++it)
+    emitDrop(it->slot, it->flag, it->type);
+}
+
+void CodeGen::dropAllScopesForExit() {
+  // return 用: 内側から全スコープの生存ローカルを drop (pop はしない)
+  for (auto sit = dropScopes_.rbegin(); sit != dropScopes_.rend(); ++sit)
+    for (auto it = sit->rbegin(); it != sit->rend(); ++it)
+      emitDrop(it->slot, it->flag, it->type);
+}
+
 Value *CodeGen::genReturn(const ReturnExpr *e) {
   if (e->value) {
     Value *v = genExpr(e->value.get());
@@ -756,6 +962,7 @@ Value *CodeGen::genReturn(const ReturnExpr *e) {
     if (currentRetSlot_ && v)
       builder_.CreateStore(v, currentRetSlot_);
   }
+  dropAllScopesForExit(); // 全スコープの生存ローカルを drop してから抜ける
   // ブロックを終端する (afterret は作らない → blockDone() が正しく true を返す)
   builder_.CreateBr(currentRetBlock_);
   return nullptr;
@@ -799,6 +1006,8 @@ Value *CodeGen::genTry(const TryExpr *e) {
     if (currentRetSlot_)
       builder_.CreateStore(errEnum, currentRetSlot_);
   }
+  // `?` の早期リターンも通常の return と同じく、生存中のローカルを drop する。
+  dropAllScopesForExit();
   builder_.CreateBr(currentRetBlock_);
 
   // 成功パス: 中身を取り出して `?` 式の値とする
@@ -981,11 +1190,17 @@ bool CodeGen::genFunctionInto(const FunctionDef &f, llvm::Function *fn,
   builder_.SetInsertPoint(bb);
 
   namedValues_.clear();
+  dropScopes_.clear();
+  dropScopes_.push_back({}); // 関数 (引数) スコープ
   // 引数をメモリにコピー (アドレスを取れるように)。型は宣言済みなので具体的。
+  size_t ai = 0;
   for (auto &arg : fn->args()) {
     AllocaInst *slot = entryAlloca(arg.getType(), std::string(arg.getName()));
     builder_.CreateStore(&arg, slot);
     namedValues_[std::string(arg.getName())] = slot;
+    if (ai < f.proto->paramTypes.size())
+      registerLocal(slot, f.proto->paramTypes[ai]); // ドロップ対象なら登録
+    ++ai;
   }
 
   // 早期リターン用: 戻り値の置き場と終端ブロックを用意する。
@@ -995,12 +1210,16 @@ bool CodeGen::genFunctionInto(const FunctionDef &f, llvm::Function *fn,
   currentRetBlock_ = BasicBlock::Create(ctx_, "return"); // 後で末尾に挿入
 
   Value *ret = genExpr(f.body.get());
-  // 本体が末尾まで到達した (発散していない) なら戻り値を格納して終端へ
+  // 本体が末尾まで到達した (発散していない) なら戻り値を格納し、引数を drop して終端へ
   if (!blockDone()) {
     if (currentRetSlot_ && ret)
       builder_.CreateStore(ret, currentRetSlot_);
+    popDropScope(); // 引数スコープを drop
     builder_.CreateBr(currentRetBlock_);
+  } else {
+    dropScopes_.pop_back(); // return が既に drop 済み
   }
+  dropScopes_.clear();
 
   fn->insert(fn->end(), currentRetBlock_);
   builder_.SetInsertPoint(currentRetBlock_);
@@ -1088,6 +1307,7 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   ensure("putchard", voidTy, {i64});
   ensure("kal_panic", voidTy, {}); // 境界違反などで呼ぶ (メッセージ表示して終了)
   ensure("malloc", PointerType::getUnqual(ctx_), {i64}); // box(e) のヒープ確保
+  ensure("free", voidTy, {PointerType::getUnqual(ctx_)}); // Drop のヒープ解放
 
   // (2) 関数本体 (非総称のみ。ジェネリックは呼び出しから単態化される)
   for (auto &f : program.functions)
@@ -1140,6 +1360,14 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
     llvm::Function *fn = module_->getFunction(inst.mangled);
     kal::Type retType = substType(inst.def->proto->retType, inst.subst);
     genFunctionInto(*inst.def, fn, inst.subst, retType);
+  }
+
+  // (5) ドロップグルー関数の本体を生成 (再帰型に対応してキューが空になるまで)。
+  typeSubst_.clear();
+  while (!pendingDropFns_.empty()) {
+    auto pd = std::move(pendingDropFns_.back());
+    pendingDropFns_.pop_back();
+    genDropBody(pd.first, pd.second);
   }
 
   // C の main を生成 (AOT/JIT 共通。JIT は __main を直接呼ぶので未使用)

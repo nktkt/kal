@@ -61,6 +61,17 @@ private:
   llvm::AllocaInst *entryAlloca(llvm::Type *ty, const std::string &name);
   // 添字 idx が [0, len) の範囲外なら kal_panic を呼ぶコードを挿入する。
   void emitBoundsCheck(llvm::Value *idx, const Type &idxType, llvm::Value *len);
+
+  // --- Drop / RAII ---
+  bool needsDrop(const Type &t);          // 値として Box を含む (解放が要る) か
+  llvm::Function *getDropFn(const Type &t); // 型 t のドロップグルー関数 (遅延生成)
+  void genDropBody(const Type &t, llvm::Function *fn); // ドロップグルーの本体生成
+  // ドロップ対象のローカル (場所 slot・生存フラグ flag・型) を現スコープに登録。
+  // needsDrop(t) なら i1 フラグ (初期 true) を作って積み、戻り値とする。
+  void registerLocal(llvm::Value *slot, const Type &t);
+  void emitDrop(llvm::Value *slot, llvm::Value *flag, const Type &t); // flag 立ちで drop
+  void popDropScope();        // 現スコープの全ローカルを (逆順で) drop して pop
+  void dropAllScopesForExit(); // return 用: 全スコープを drop (pop はしない)
   // enum バリアント構築 (具体化された enum 型 + tag + ペイロード)
   llvm::Value *genVariant(const Type &enumType, int tag,
                           llvm::ArrayRef<llvm::Value *> payload);
@@ -109,6 +120,16 @@ private:
   llvm::Value *currentRetSlot_ = nullptr;       // 戻り値の置き場 (unit なら null)
   llvm::BasicBlock *currentRetBlock_ = nullptr; // 終端ブロック
   Type currentRetTypeCG_;                        // 戻り値型 (置換済み)
+
+  // Drop: 型ごとのドロップグルー関数と、スコープごとのドロップ対象ローカル。
+  struct DropEntry {
+    llvm::Value *slot;
+    llvm::Value *flag;
+    Type type;
+  };
+  std::map<std::string, llvm::Function *> dropFns_; // マングル名 → drop_T
+  std::vector<std::pair<Type, llvm::Function *>> pendingDropFns_; // 本体生成待ち
+  std::vector<std::vector<DropEntry>> dropScopes_;                // スコープ stack
 };
 
 } // namespace kal

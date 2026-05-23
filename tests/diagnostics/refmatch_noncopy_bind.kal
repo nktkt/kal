@@ -1,0 +1,8 @@
+# A reference match (&self) only borrows the enum, so its non-Copy payload
+# cannot be bound by value — doing so would move out of a borrow and lead to a
+# double free when both the binding and the original owner are dropped.
+enum Opt { Som(Box<i64>), Non }
+impl Opt {
+  fn peek(&self) -> i64 = match self { Som(x) => *x, Non => -1 };
+}
+{ let o: Opt = Som(box(7)); printi(o.peek()); };
