@@ -1,0 +1,6 @@
+error[E0107]: ペイロードの型が一致しません (期待 i64, 実際 f64)
+ --> tests/diagnostics/generic_payload_mismatch.kal:2:30
+  |
+2 | fn f() -> Option<i64> = Some(1.5);
+  |                              ^^^
+1 個のエラーで中断しました

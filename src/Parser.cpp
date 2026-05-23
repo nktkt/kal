@@ -137,13 +137,33 @@ bool Parser::parseType(Type &out) {
     diag_.error(cur_.span, "E0030", "型が必要です");
     return false;
   }
-  // 組み込み型名、なければ struct 名 (存在チェックは Sema)
+  // 組み込み型名、なければ struct/enum 名 (存在チェックは Sema)
   if (typeFromName(cur_.text, out)) {
     advance();
     return true;
   }
   out = Type::structTy(cur_.text);
   advance();
+  // 型引数:  Name<T1, T2, ...>  (ジェネリック具体化。enum 名解決は Sema)
+  if (cur_.kind == Tok::Less) {
+    advance();
+    std::vector<Type> args;
+    for (;;) {
+      Type a;
+      if (!parseType(a))
+        return false;
+      args.push_back(std::move(a));
+      if (cur_.kind == Tok::Greater)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0039", "型引数には ',' か '>' が必要です");
+        return false;
+      }
+      advance();
+    }
+    advance(); // '>'
+    out.elems = std::move(args);
+  }
   return true;
 }
 
@@ -863,6 +883,27 @@ std::unique_ptr<EnumDef> Parser::parseEnumDef() {
   ed->name = cur_.text;
   ed->nameSpan = cur_.span;
   advance();
+
+  // 型引数:  <P1, P2, ...>  (省略時は非総称)
+  if (cur_.kind == Tok::Less) {
+    advance();
+    for (;;) {
+      if (cur_.kind != Tok::Identifier) {
+        diag_.error(cur_.span, "E0087", "型引数名が必要です");
+        return nullptr;
+      }
+      ed->typeParams.push_back(cur_.text);
+      advance();
+      if (cur_.kind == Tok::Greater)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0088", "型引数には ',' か '>' が必要です");
+        return nullptr;
+      }
+      advance();
+    }
+    advance(); // '>'
+  }
 
   if (cur_.kind != Tok::LBrace) {
     diag_.error(cur_.span, "E0081", "enum には '{' が必要です");

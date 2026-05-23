@@ -1,0 +1,6 @@
+error[E0089]: 再帰的な型は無限サイズです: List (参照・スライスによる間接化が必要です)
+ --> tests/diagnostics/recursive_type.kal:3:6
+  |
+3 | enum List<T> { Cons(T, List<T>), Nil }
+  |      ^^^^
+1 個のエラーで中断しました

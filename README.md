@@ -71,9 +71,10 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 
 ### Types
 `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), user-defined
-**`struct`s**, **`enum`s** (algebraic data types), **tuples** `(T, U, …)`,
-**arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`, and **references**
-`&T` / `&mut T`.
+**`struct`s**, **`enum`s** (algebraic data types, optionally **generic** —
+`enum Name<T> { … }`, with `Option<T>` / `Result<T, E>` built in), **tuples**
+`(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`, and
+**references** `&T` / `&mut T`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 There are **no implicit conversions** — convert explicitly with `as`.
@@ -222,6 +223,36 @@ A `match` arm is `Variant(bindings) => expr` or a `_` wildcard; it must cover
 every variant (or include `_`). Variant payloads are bound by the names in the
 pattern (`_` ignores one).
 
+### Generics & `Option` / `Result`
+
+Enums can be **generic** over types: `enum Name<T, …> { … }`. Each concrete use
+is *monomorphized* (a separate type is generated per instantiation). Type
+arguments are written `Name<T1, …>` and are **inferred** at construction from the
+payload and the expected type — no turbofish needed.
+
+`Option<T>` and `Result<T, E>` come built in (a prelude), so `Some`/`None` and
+`Ok`/`Err` are always available:
+
+```
+fn checked_div(a: i64, b: i64) -> Option<i64> =
+  if b == 0 then None else Some(a / b);     # None/Some inferred as Option<i64>
+
+fn unwrap_or(o: Option<i64>, dflt: i64) -> i64 =
+  match o { Some(x) => x, None => dflt };    # match on an instantiation
+
+unwrap_or(checked_div(10, 2), -1);           # => 5
+unwrap_or(checked_div(10, 0), -1);           # => -1
+```
+
+```
+enum Option<T>    { Some(T), None }          # the built-in prelude definitions
+enum Result<T, E> { Ok(T), Err(E) }
+```
+
+Type arguments must be supplied where they can't be inferred (e.g. a bare `None`
+needs a `: Option<i64>` annotation or a typed context). Generic *functions* and
+generic *structs* are not implemented yet (see [ROADMAP.md](ROADMAP.md)).
+
 ### References
 
 ```
@@ -282,7 +313,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

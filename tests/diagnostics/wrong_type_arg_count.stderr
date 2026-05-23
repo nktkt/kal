@@ -1,0 +1,6 @@
+error[E0046]: 未定義または不正な型です: Option<i64, i64>
+ --> tests/diagnostics/wrong_type_arg_count.kal:2:4
+  |
+2 | fn f(x: Option<i64, i64>) -> i64 = 0;
+  |    ^^^^^^^^^^^^^^^^^^^^^^
+1 個のエラーで中断しました

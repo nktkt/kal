@@ -1,0 +1,48 @@
+# Option<T> / Result<T, E>: ジェネリックな標準型 (prelude で常に使える)。
+#   enum Option<T>    { Some(T), None }
+#   enum Result<T, E> { Ok(T), Err(E) }
+# 型引数はコンストラクタ引数と期待型から推論される (turbofish 不要)。
+
+# 0 除算を防ぐ。失敗を None で表す。
+fn checked_div(a: i64, b: i64) -> Option<i64> =
+  if b == 0 then None
+  else Some(a / b);
+
+# Option をデフォルト値付きで取り出す。
+fn unwrap_or(o: Option<i64>, dflt: i64) -> i64 =
+  match o {
+    Some(x) => x,
+    None    => dflt,
+  };
+
+printi(unwrap_or(checked_div(10, 2), -1));   # => 5
+printi(unwrap_or(checked_div(10, 0), -1));   # => -1   (None → デフォルト)
+
+# Result<T, E>: 成功 Ok(T) か失敗 Err(E)。ここでは E はエラーコード (i64)。
+fn safe_sqrt_floor(n: i64) -> Result<i64, i64> = {
+  if n < 0 then Err(1)          # 1 = 負の入力
+  else {
+    let mut r: i64 = 0;
+    for i = 0 as i64, (i + 1) * (i + 1) <= n, 1 in { r = i + 1; };
+    Ok(r)
+  }
+};
+
+fn report(res: Result<i64, i64>) -> i64 =
+  match res {
+    Ok(v)   => v,
+    Err(code) => 0 - code,       # エラーは負のコードで表す
+  };
+
+printi(report(safe_sqrt_floor(17)));   # => 4    (4*4=16 <= 17 < 25)
+printi(report(safe_sqrt_floor(-9)));   # => -1   (Err(1) → -1)
+
+# 入れ子: Option<Option<i64>>
+fn flatten(o: Option<Option<i64>>) -> Option<i64> =
+  match o {
+    Some(inner) => inner,
+    None        => None,
+  };
+
+printi(unwrap_or(flatten(Some(Some(42))), -1));   # => 42
+printi(unwrap_or(flatten(None), -1));             # => -1

@@ -1,0 +1,3 @@
+# `None` carries no value, so its type argument can't be inferred without
+# an expected type (e.g. a `: Option<i64>` annotation or a typed context).
+None;

@@ -10,15 +10,17 @@ namespace kal {
 /// Kal の型。整数・浮動小数点・bool・unit に加え、struct (公称) と tuple (構造的)。
 struct Type {
   enum class Kind {
-    Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref, Array, Slice
+    Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref, Array, Slice,
+    Param
   };
   Kind kind = Kind::Unknown;
   unsigned bits = 0;        // Int: 8/16/32/64, Float: 32/64, Bool: 1
   bool isSigned = true;     // Int のみ
   bool refMut = false;      // Ref が &mut か
   unsigned arrayLen = 0;    // Array の要素数
-  std::string name;         // Struct / Enum の名前
+  std::string name;         // Struct / Enum の名前、Param の型変数名
   std::vector<Type> elems;  // Tuple の要素型 / Ref の指す型 / Array の要素型(elems[0])
+                            // / Struct・Enum の型引数 (ジェネリック具体化)
 
   static Type unknown() { return {}; }
   static Type unit() { return {Kind::Unit, 0, true}; }
@@ -40,6 +42,19 @@ struct Type {
   static Type enumTy(std::string n) {
     Type t;
     t.kind = Kind::Enum;
+    t.name = std::move(n);
+    return t;
+  }
+  static Type enumTy(std::string n, std::vector<Type> args) {
+    Type t;
+    t.kind = Kind::Enum;
+    t.name = std::move(n);
+    t.elems = std::move(args); // 型引数 (ジェネリック具体化)
+    return t;
+  }
+  static Type paramTy(std::string n) {
+    Type t;
+    t.kind = Kind::Param;
     t.name = std::move(n);
     return t;
   }
@@ -75,6 +90,7 @@ struct Type {
   bool isRef() const { return kind == Kind::Ref; }
   bool isArray() const { return kind == Kind::Array; }
   bool isSlice() const { return kind == Kind::Slice; }
+  bool isParam() const { return kind == Kind::Param; }
   bool isNumeric() const { return isInt() || isFloat(); }
   bool isKnown() const { return kind != Kind::Unknown; }
   const Type &pointee() const { return elems[0]; }   // Ref のとき有効
@@ -90,7 +106,9 @@ struct Type {
       return bits == o.bits;
     case Kind::Struct:
     case Kind::Enum:
-      return name == o.name; // 公称型: 名前で同一性判定
+      return name == o.name && elems == o.elems; // 公称型 + 型引数
+    case Kind::Param:
+      return name == o.name;
     case Kind::Tuple:
       return elems == o.elems; // 構造的
     case Kind::Ref:

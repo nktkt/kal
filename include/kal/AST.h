@@ -277,10 +277,12 @@ struct EnumVariant {
   std::vector<Type> payloadTypes;
 };
 
-/// enum 定義 (Rust 流 ADT): `enum Name { V1, V2(T, ...), ... }`
+/// enum 定義 (Rust 流 ADT): `enum Name<P, ...> { V1, V2(T, ...), ... }`
+/// typeParams が空でなければジェネリック (使用箇所ごとに単態化される)。
 struct EnumDef {
   std::string name;
   Span nameSpan;
+  std::vector<std::string> typeParams; // ジェネリックな型引数名 (空なら非総称)
   std::vector<EnumVariant> variants;
   Span span;
 };

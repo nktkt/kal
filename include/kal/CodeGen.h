@@ -52,12 +52,13 @@ private:
   llvm::Value *genAddr(const Expr *e);
   // entry ブロックに alloca を作る (mem2reg が昇格できる)
   llvm::AllocaInst *entryAlloca(llvm::Type *ty, const std::string &name);
-  // enum バリアント構築 (tag + ペイロード)
-  llvm::Value *genVariant(const std::string &enumName, int tag,
+  // enum バリアント構築 (具体化された enum 型 + tag + ペイロード)
+  llvm::Value *genVariant(const Type &enumType, int tag,
                           llvm::ArrayRef<llvm::Value *> payload);
 
   llvm::StructType *getStructType(const std::string &name); // 名前→LLVM構造体型
-  llvm::StructType *getEnumType(const std::string &name);   // 名前→タグ付き共用体
+  // 具体化された enum 型 (型引数つき) → タグ付き共用体 (単態化)
+  llvm::StructType *getEnumType(const Type &enumType);
   llvm::Function *declareProto(const Prototype &p);
   bool genFunction(const FunctionDef &f);
   void emitRuntimeDefs(); // printi/printd/putchard の本体 (libc 呼び出し)

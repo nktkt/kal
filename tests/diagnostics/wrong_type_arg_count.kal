@@ -1,0 +1,2 @@
+# Option takes exactly one type argument; Option<i64, i64> is wrong.
+fn f(x: Option<i64, i64>) -> i64 = 0;

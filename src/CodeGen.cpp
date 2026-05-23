@@ -21,6 +21,19 @@ CodeGen::CodeGen(LLVMContext &ctx, DiagnosticEngine &diag,
                  const DataLayout &dl)
     : ctx_(ctx), diag_(diag), dl_(dl), builder_(ctx) {}
 
+// subst に従って Param を具体型へ置換する (単態化用)。
+static kal::Type substType(const kal::Type &t,
+                           const std::map<std::string, kal::Type> &subst) {
+  if (t.kind == kal::Type::Kind::Param) {
+    auto it = subst.find(t.name);
+    return it != subst.end() ? it->second : t;
+  }
+  kal::Type r = t;
+  for (auto &e : r.elems)
+    e = substType(e, subst);
+  return r;
+}
+
 llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
   switch (t.kind) {
   case kal::Type::Kind::Bool:
@@ -35,7 +48,9 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
   case kal::Type::Kind::Struct:
     return getStructType(t.name);
   case kal::Type::Kind::Enum:
-    return getEnumType(t.name);
+    return getEnumType(t);
+  case kal::Type::Kind::Param:
+    return nullptr; // 単態化後は現れない (内部バグなら nullptr)
   case kal::Type::Kind::Ref:
     return PointerType::getUnqual(ctx_);
   case kal::Type::Kind::Tuple: {
@@ -71,29 +86,36 @@ StructType *CodeGen::getStructType(const std::string &name) {
 
 // enum を { i64 tag, [S x i8] payload } で表す (S = 最大バリアントのサイズ)。
 // tag を i64 にすることで payload が 8 バイト境界に整列する。
-StructType *CodeGen::getEnumType(const std::string &name) {
-  auto it = enumTypes_.find(name);
+// ジェネリック enum は具体化 (型引数) ごとに別々の型として単態化する。
+StructType *CodeGen::getEnumType(const kal::Type &enumType) {
+  std::string mangled = enumType.str(); // "Shape" / "Option<i64>" など
+  auto it = enumTypes_.find(mangled);
   if (it != enumTypes_.end())
     return it->second;
-  const EnumDef *ed = enumDefs_[name];
+  const EnumDef *ed = enumDefs_[enumType.name];
+  // 型引数 → 具体型の対応 (非総称なら空)
+  std::map<std::string, kal::Type> subst;
+  for (size_t i = 0; i < ed->typeParams.size() && i < enumType.elems.size(); ++i)
+    subst[ed->typeParams[i]] = enumType.elems[i];
+
   uint64_t maxSize = 0;
   for (auto &v : ed->variants) {
     std::vector<llvm::Type *> fts;
     for (auto &pt : v.payloadTypes)
-      fts.push_back(toLLVM(pt));
+      fts.push_back(toLLVM(substType(pt, subst)));
     StructType *vs = StructType::get(ctx_, fts);
     maxSize = std::max(maxSize, dl_.getTypeAllocSize(vs).getFixedValue());
   }
   llvm::Type *tag = llvm::Type::getInt64Ty(ctx_);
   llvm::Type *payload = ArrayType::get(llvm::Type::getInt8Ty(ctx_), maxSize);
-  StructType *et = StructType::create(ctx_, {tag, payload}, name);
-  enumTypes_[name] = et;
+  StructType *et = StructType::create(ctx_, {tag, payload}, mangled);
+  enumTypes_[mangled] = et;
   return et;
 }
 
-Value *CodeGen::genVariant(const std::string &enumName, int tag,
+Value *CodeGen::genVariant(const kal::Type &enumType, int tag,
                            ArrayRef<Value *> payload) {
-  StructType *et = getEnumType(enumName);
+  StructType *et = getEnumType(enumType);
   // メモリ上に組み立ててから値としてロードする (タグ付き共用体)
   AllocaInst *slot = builder_.CreateAlloca(et);
   slot->setAlignment(Align(8));
@@ -359,7 +381,7 @@ AllocaInst *CodeGen::entryAlloca(llvm::Type *ty, const std::string &name) {
 
 Value *CodeGen::genVariable(const VariableExpr *e) {
   if (e->variantTag >= 0) // 引数なし enum バリアント
-    return genVariant(e->variantEnum, e->variantTag, {});
+    return genVariant(e->type, e->variantTag, {});
   // 変数はメモリ常駐 (alloca)。読み出しは load。
   auto *slot = cast<AllocaInst>(namedValues_[e->name]);
   return builder_.CreateLoad(slot->getAllocatedType(), slot, e->name);
@@ -539,7 +561,7 @@ Value *CodeGen::genCall(const CallExpr *e) {
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
   if (e->variantTag >= 0) // enum バリアント構築
-    return genVariant(e->variantEnum, e->variantTag, args);
+    return genVariant(e->type, e->variantTag, args);
   // 組み込み len(s): スライス {ptr, len} の len フィールドを取り出す
   if (e->isLenBuiltin)
     return builder_.CreateExtractValue(args[0], {1}, "len");

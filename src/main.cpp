@@ -207,8 +207,18 @@ int main(int argc, char **argv) {
 
   // 字句解析 + 構文解析
   SourceManager sm;
-  uint32_t fileId = sm.addFile(name, std::move(src));
   DiagnosticEngine diag(sm);
+
+  // prelude: 標準型 Option / Result (ジェネリック enum) を先に解析して併合する。
+  // 使われた具体化のみ CodeGen で単態化されるため未使用ならコード生成されない。
+  static const char *kPrelude = "enum Option<T> { Some(T), None }\n"
+                                "enum Result<T, E> { Ok(T), Err(E) }\n";
+  uint32_t preludeId = sm.addFile("<prelude>", kPrelude);
+  Lexer preludeLexer(sm, diag, preludeId);
+  Parser preludeParser(preludeLexer, diag);
+  Program prelude = preludeParser.parseProgram();
+
+  uint32_t fileId = sm.addFile(name, std::move(src));
   Lexer lexer(sm, diag, fileId);
   Parser parser(lexer, diag);
   Program prog = parser.parseProgram();
@@ -216,6 +226,12 @@ int main(int argc, char **argv) {
     errs() << diag.numErrors() << " 個のエラーで中断しました\n";
     return 1;
   }
+
+  // prelude の enum 定義をユーザープログラムの先頭へ併合する。
+  // (先に登録されるので、ユーザーが Option/Result を再定義したら
+  //  そのユーザー側が「重複」として診断され、span がユーザーコードを指す)
+  for (auto it = prelude.enums.rbegin(); it != prelude.enums.rend(); ++it)
+    prog.enums.insert(prog.enums.begin(), std::move(*it));
 
   // 型検査
   Sema sema(diag);

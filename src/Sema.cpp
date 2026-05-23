@@ -22,11 +22,74 @@ const EnumDef *Sema::findEnum(const std::string &name) const {
 Type Sema::resolve(Type t) const {
   if (t.kind == Type::Kind::Struct && findEnum(t.name))
     t.kind = Type::Kind::Enum; // パーサが Struct と誤判定した enum 名を直す
-  else if (t.kind == Type::Kind::Tuple || t.kind == Type::Kind::Ref ||
-           t.kind == Type::Kind::Array || t.kind == Type::Kind::Slice)
-    for (auto &e : t.elems)
-      e = resolve(e);
+  // 複合型の要素・型引数を再帰的に解決 (Tuple/Ref/Array/Slice/Struct/Enum)
+  for (auto &e : t.elems)
+    e = resolve(e);
   return t;
+}
+
+// 型名のうち、ジェネリック型引数 (params) に一致するものを Param へ変換する。
+Type Sema::bindParams(Type t, const std::set<std::string> &params) const {
+  if (t.kind == Type::Kind::Struct && params.count(t.name))
+    return Type::paramTy(t.name);
+  for (auto &e : t.elems)
+    e = bindParams(e, params);
+  return t;
+}
+
+// subst に従って Param を具体型へ置換する。
+Type Sema::substType(const Type &t,
+                     const std::map<std::string, Type> &subst) const {
+  if (t.isParam()) {
+    auto it = subst.find(t.name);
+    return it != subst.end() ? it->second : t;
+  }
+  Type r = t;
+  for (auto &e : r.elems)
+    e = substType(e, subst);
+  return r;
+}
+
+// decl (Param を含む) と actual (具体型) を突き合わせて型引数を解く。
+void Sema::unifyParam(const Type &decl, const Type &actual,
+                      std::map<std::string, Type> &subst) const {
+  if (decl.isParam()) {
+    if (actual.isKnown() && !subst.count(decl.name))
+      subst[decl.name] = actual;
+    return;
+  }
+  if (decl.kind == actual.kind && decl.elems.size() == actual.elems.size())
+    for (size_t i = 0; i < decl.elems.size(); ++i)
+      unifyParam(decl.elems[i], actual.elems[i], subst);
+}
+
+bool Sema::hasParam(const Type &t) {
+  if (t.isParam())
+    return true;
+  for (auto &e : t.elems)
+    if (hasParam(e))
+      return true;
+  return false;
+}
+
+// 型 t が「値として」含む struct/enum 名を集める (無限サイズ検出用)。
+// 参照・スライスはポインタなので連鎖を断ち切る。型引数は保守的に値とみなす。
+static void collectValueDeps(const Type &t, std::set<std::string> &out) {
+  switch (t.kind) {
+  case Type::Kind::Struct:
+  case Type::Kind::Enum:
+    out.insert(t.name);
+    for (auto &a : t.elems) // 型引数も保守的に辿る
+      collectValueDeps(a, out);
+    return;
+  case Type::Kind::Tuple:
+  case Type::Kind::Array:
+    for (auto &e : t.elems)
+      collectValueDeps(e, out);
+    return;
+  default: // Ref/Slice はポインタ (有限)、Param/スカラーは葉
+    return;
+  }
 }
 
 bool Sema::run(Program &program) {
@@ -46,10 +109,14 @@ bool Sema::run(Program &program) {
   for (auto &sd : program.structs)
     for (auto &f : sd->fields)
       f.type = resolve(f.type);
-  for (auto &ed : program.enums)
+  for (auto &ed : program.enums) {
+    std::set<std::string> params(ed->typeParams.begin(), ed->typeParams.end());
     for (auto &v : ed->variants)
       for (auto &pt : v.payloadTypes)
-        pt = resolve(pt);
+        // 先に型引数名を Param へ束縛してから resolve する。
+        // (順序が逆だと resolve が型引数名を同名の enum に誤って解決してしまう)
+        pt = resolve(bindParams(pt, params));
+  }
   for (auto &ex : program.externs) {
     for (auto &pt : ex->paramTypes)
       pt = resolve(pt);
@@ -63,10 +130,19 @@ bool Sema::run(Program &program) {
 
   // (3) 型存在チェック (Ref/Tuple は再帰的に)
   std::function<bool(const Type &)> knownType = [&](const Type &t) -> bool {
+    if (t.isParam())
+      return true; // 型変数は常に妥当
     if (t.isStruct())
-      return findStruct(t.name) != nullptr;
-    if (t.isEnum())
-      return findEnum(t.name) != nullptr;
+      return findStruct(t.name) != nullptr && t.elems.empty();
+    if (t.isEnum()) {
+      const EnumDef *ed = findEnum(t.name);
+      if (!ed || t.elems.size() != ed->typeParams.size())
+        return false; // enum 不在、または型引数の数が合わない
+      for (auto &a : t.elems)
+        if (!knownType(a))
+          return false;
+      return true;
+    }
     if (t.isRef() || t.isArray() || t.isSlice())
       return knownType(t.elems[0]);
     if (t.isTuple()) {
@@ -80,20 +156,82 @@ bool Sema::run(Program &program) {
   for (auto &sd : program.structs)
     for (auto &f : sd->fields)
       if (!knownType(f.type))
-        diag_.error(f.span, "E0046", "未定義の型です: " + f.type.name);
+        diag_.error(f.span, "E0046", "未定義または不正な型です: " + f.type.str());
   for (auto &ed : program.enums)
     for (auto &v : ed->variants)
       for (auto &pt : v.payloadTypes)
         if (!knownType(pt))
-          diag_.error(v.span, "E0046", "未定義の型です: " + pt.name);
+          diag_.error(v.span, "E0046", "未定義または不正な型です: " + pt.str());
+  for (auto &ex : program.externs) {
+    for (auto &pt : ex->paramTypes)
+      if (!knownType(pt))
+        diag_.error(ex->span, "E0046", "未定義または不正な型です: " + pt.str());
+    if (!knownType(ex->retType))
+      diag_.error(ex->span, "E0046",
+                  "未定義または不正な型です: " + ex->retType.str());
+  }
+  for (auto &f : program.functions) {
+    for (auto &pt : f->proto->paramTypes)
+      if (!knownType(pt))
+        diag_.error(f->proto->span, "E0046",
+                    "未定義または不正な型です: " + pt.str());
+    if (!knownType(f->proto->retType))
+      diag_.error(f->proto->span, "E0046",
+                  "未定義または不正な型です: " + f->proto->retType.str());
+  }
 
-  // (4) バリアントを登録 (名前はグローバルに一意・解決済みペイロード型で)
+  // (3.5) 無限サイズの値型 (間接化なしの再帰) を拒否する。
+  // 値として自分自身に到達できる struct/enum はサイズが確定せず、
+  // 単態化時に無限再帰する。参照・スライスを挟めば有限になる。
+  {
+    std::map<std::string, std::set<std::string>> deps;
+    for (auto &sd : program.structs) {
+      auto &d = deps[sd->name];
+      for (auto &f : sd->fields)
+        collectValueDeps(f.type, d);
+    }
+    for (auto &ed : program.enums) {
+      auto &d = deps[ed->name];
+      for (auto &v : ed->variants)
+        for (auto &pt : v.payloadTypes)
+          collectValueDeps(pt, d);
+    }
+    std::function<bool(const std::string &, const std::string &,
+                       std::set<std::string> &)>
+        reaches = [&](const std::string &from, const std::string &target,
+                      std::set<std::string> &seen) -> bool {
+      auto it = deps.find(from);
+      if (it == deps.end())
+        return false;
+      for (auto &nxt : it->second) {
+        if (nxt == target)
+          return true;
+        if (seen.insert(nxt).second && reaches(nxt, target, seen))
+          return true;
+      }
+      return false;
+    };
+    auto checkFinite = [&](const std::string &name, Span span) {
+      std::set<std::string> seen;
+      if (reaches(name, name, seen))
+        diag_.error(span, "E0089",
+                    "再帰的な型は無限サイズです: " + name +
+                        " (参照・スライスによる間接化が必要です)");
+    };
+    for (auto &sd : program.structs)
+      checkFinite(sd->name, sd->nameSpan);
+    for (auto &ed : program.enums)
+      checkFinite(ed->name, ed->nameSpan);
+  }
+
+  // (4) バリアントを登録 (名前はグローバルに一意・所属 enum の型引数つき)
   for (auto &ed : program.enums)
     for (size_t i = 0; i < ed->variants.size(); ++i) {
       const auto &v = ed->variants[i];
       if (variants_.count(v.name))
         diag_.error(v.span, "E0086", "バリアント名が重複しています: " + v.name);
-      variants_[v.name] = {ed->name, static_cast<int>(i), v.payloadTypes};
+      variants_[v.name] = {ed->name, static_cast<int>(i), v.payloadTypes,
+                           ed->typeParams};
     }
 
   // 組み込み関数のシグネチャ (すべて unit を返す → トップレベルで表示されない)
@@ -138,13 +276,13 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     t = checkNumber(static_cast<NumberExpr *>(e), expected);
     break;
   case Expr::Kind::Variable:
-    t = checkVariable(static_cast<VariableExpr *>(e));
+    t = checkVariable(static_cast<VariableExpr *>(e), expected);
     break;
   case Expr::Kind::Binary:
     t = checkBinary(static_cast<BinaryExpr *>(e), expected);
     break;
   case Expr::Kind::Call:
-    t = checkCall(static_cast<CallExpr *>(e));
+    t = checkCall(static_cast<CallExpr *>(e), expected);
     break;
   case Expr::Kind::If:
     t = checkIf(static_cast<IfExpr *>(e), expected);
@@ -209,21 +347,41 @@ Type Sema::checkNumber(NumberExpr *e, std::optional<Type> expected) {
   return Type::intTy(32, true);
 }
 
-Type Sema::checkVariable(VariableExpr *e) {
+Type Sema::checkVariable(VariableExpr *e, std::optional<Type> expected) {
   auto it = locals_.find(e->name);
   if (it != locals_.end())
     return it->second.type;
   // ローカルになければ、引数なし enum バリアントかもしれない
   auto vit = variants_.find(e->name);
   if (vit != variants_.end()) {
-    if (!vit->second.payloadTypes.empty()) {
+    const VariantInfo &vi = vit->second;
+    if (!vi.payloadTypes.empty()) {
       diag_.error(e->span, "E0105",
                   "バリアント " + e->name + " には引数が必要です");
       return Type::unknown();
     }
-    e->variantTag = vit->second.tag;
-    e->variantEnum = vit->second.enumName;
-    return Type::enumTy(vit->second.enumName);
+    e->variantTag = vi.tag;
+    e->variantEnum = vi.enumName;
+    if (vi.typeParams.empty())
+      return Type::enumTy(vi.enumName);
+    // ジェネリック (None 等): 引数がないので型引数は期待型からのみ決まる
+    std::map<std::string, Type> subst;
+    if (expected && expected->isEnum() && expected->name == vi.enumName &&
+        expected->elems.size() == vi.typeParams.size())
+      for (size_t i = 0; i < vi.typeParams.size(); ++i)
+        subst[vi.typeParams[i]] = expected->elems[i];
+    std::vector<Type> args;
+    for (auto &p : vi.typeParams) {
+      auto sit = subst.find(p);
+      if (sit == subst.end()) {
+        diag_.error(e->span, "E0097",
+                    "型引数を推論できません: " + vi.enumName + " の " + p +
+                        " (型注釈が必要です)");
+        return Type::unknown();
+      }
+      args.push_back(sit->second);
+    }
+    return Type::enumTy(vi.enumName, std::move(args));
   }
   diag_.error(e->span, "E0100", "未定義の変数です");
   return Type::unknown();
@@ -295,7 +453,7 @@ Type Sema::checkUnary(UnaryExpr *e, std::optional<Type> expected) {
   return t;
 }
 
-Type Sema::checkCall(CallExpr *e) {
+Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
   // 組み込み len(s: &[T]) -> i64 (ユーザーが len を定義していなければ)
   if (e->callee == "len" && !funcs_.count("len")) {
     e->isLenBuiltin = true;
@@ -321,21 +479,62 @@ Type Sema::checkCall(CallExpr *e) {
     auto vit = variants_.find(e->callee);
     if (vit != variants_.end()) {
       const VariantInfo &vi = vit->second;
-      if (vi.payloadTypes.size() != e->args.size())
+      e->variantTag = vi.tag;
+      e->variantEnum = vi.enumName;
+      if (vi.payloadTypes.size() != e->args.size()) {
         diag_.error(e->span, "E0106",
                     "バリアント " + e->callee + " のペイロード数が一致しません (期待 " +
                         std::to_string(vi.payloadTypes.size()) + ", 実際 " +
                         std::to_string(e->args.size()) + ")");
-      for (size_t i = 0; i < e->args.size() && i < vi.payloadTypes.size(); ++i) {
-        Type at = check(e->args[i].get(), vi.payloadTypes[i]);
-        if (at.isKnown() && at != vi.payloadTypes[i])
-          diag_.error(e->args[i]->span, "E0107",
-                      "ペイロードの型が一致しません (期待 " +
-                          vi.payloadTypes[i].str() + ", 実際 " + at.str() + ")");
+        for (auto &a : e->args)
+          check(a.get(), std::nullopt);
+        return vi.typeParams.empty() ? Type::enumTy(vi.enumName)
+                                     : Type::unknown();
       }
-      e->variantTag = vi.tag;
-      e->variantEnum = vi.enumName;
-      return Type::enumTy(vi.enumName);
+      // 非総称: 従来どおりペイロード型で検査
+      if (vi.typeParams.empty()) {
+        for (size_t i = 0; i < e->args.size(); ++i) {
+          Type at = check(e->args[i].get(), vi.payloadTypes[i]);
+          if (at.isKnown() && at != vi.payloadTypes[i])
+            diag_.error(e->args[i]->span, "E0107",
+                        "ペイロードの型が一致しません (期待 " +
+                            vi.payloadTypes[i].str() + ", 実際 " + at.str() +
+                            ")");
+        }
+        return Type::enumTy(vi.enumName);
+      }
+      // ジェネリック: 期待型 + 引数から型引数を推論する
+      std::map<std::string, Type> subst;
+      if (expected && expected->isEnum() && expected->name == vi.enumName &&
+          expected->elems.size() == vi.typeParams.size())
+        for (size_t i = 0; i < vi.typeParams.size(); ++i)
+          subst[vi.typeParams[i]] = expected->elems[i];
+      for (size_t i = 0; i < e->args.size(); ++i) {
+        Type hint = substType(vi.payloadTypes[i], subst);
+        Type at = check(e->args[i].get(),
+                        hasParam(hint) ? std::nullopt : std::optional<Type>(hint));
+        unifyParam(vi.payloadTypes[i], at, subst);
+      }
+      std::vector<Type> args;
+      for (auto &p : vi.typeParams) {
+        auto sit = subst.find(p);
+        if (sit == subst.end()) {
+          diag_.error(e->span, "E0097",
+                      "型引数を推論できません: " + vi.enumName + " の " + p +
+                          " (型注釈が必要です)");
+          return Type::unknown();
+        }
+        args.push_back(sit->second);
+      }
+      // 解決後のペイロード型で各引数を再検証
+      for (size_t i = 0; i < e->args.size(); ++i) {
+        Type want = substType(vi.payloadTypes[i], subst);
+        if (e->args[i]->type.isKnown() && e->args[i]->type != want)
+          diag_.error(e->args[i]->span, "E0107",
+                      "ペイロードの型が一致しません (期待 " + want.str() +
+                          ", 実際 " + e->args[i]->type.str() + ")");
+      }
+      return Type::enumTy(vi.enumName, std::move(args));
     }
     diag_.error(e->calleeSpan, "E0102", "未定義の関数を呼び出しています");
     for (auto &a : e->args)
@@ -686,6 +885,12 @@ Type Sema::checkMatch(MatchExpr *e, std::optional<Type> expected) {
   if (!ed)
     return Type::unknown();
 
+  // ジェネリック enum なら、対象の型引数でペイロード型を具体化する
+  std::map<std::string, Type> subst;
+  if (!ed->typeParams.empty() && st.elems.size() == ed->typeParams.size())
+    for (size_t i = 0; i < ed->typeParams.size(); ++i)
+      subst[ed->typeParams[i]] = st.elems[i];
+
   Type result = Type::unknown();
   bool haveResult = false;
   bool hasWildcard = false;
@@ -712,20 +917,23 @@ Type Sema::checkMatch(MatchExpr *e, std::optional<Type> expected) {
       }
       const EnumVariant &v = ed->variants[idx];
       arm.tag = idx;
-      arm.payloadTypes = v.payloadTypes;
+      // 型引数を適用した具体ペイロード型 (非総称なら v.payloadTypes と同じ)
+      std::vector<Type> pts;
+      for (auto &pt : v.payloadTypes)
+        pts.push_back(substType(pt, subst));
+      arm.payloadTypes = pts;
       if (covered[idx])
         diag_.warning(arm.variantSpan, "E0092",
                       "このバリアントは既に網羅されています");
       covered[idx] = true;
-      if (arm.bindings.size() != v.payloadTypes.size())
+      if (arm.bindings.size() != pts.size())
         diag_.error(arm.variantSpan, "E0093",
                     "束縛の数がペイロードと一致しません (期待 " +
-                        std::to_string(v.payloadTypes.size()) + ", 実際 " +
+                        std::to_string(pts.size()) + ", 実際 " +
                         std::to_string(arm.bindings.size()) + ")");
-      for (size_t i = 0; i < arm.bindings.size() && i < v.payloadTypes.size();
-           ++i)
+      for (size_t i = 0; i < arm.bindings.size() && i < pts.size(); ++i)
         if (arm.bindings[i] != "_")
-          binds.push_back({arm.bindings[i], v.payloadTypes[i]});
+          binds.push_back({arm.bindings[i], pts[i]});
     }
 
     // 束縛をスコープに入れて本体を検査 (束縛は不変)

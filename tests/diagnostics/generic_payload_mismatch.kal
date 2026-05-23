@@ -1,0 +1,2 @@
+# Some(1.5) does not fit Option<i64>: the payload must match the type argument.
+fn f() -> Option<i64> = Some(1.5);

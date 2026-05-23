@@ -5,6 +5,13 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Generics (enums) + `Option`/`Result`:** generic enums
+  `enum Name<T, …> { … }`, monomorphized per concrete instantiation. Type
+  arguments are written `Name<T1, …>` and **inferred** at construction from the
+  arguments and the expected type (no turbofish). `Option<T>` and
+  `Result<T, E>` are provided as a built-in **prelude** (`Some`/`None`,
+  `Ok`/`Err`), and `match` works on instantiations. Generic functions and
+  generic structs are not in yet.
 - **Slices:** `&[T]` / `&mut [T]` — a length-carrying view into an array
   (a fat pointer `{ptr, len}`). Borrowing an array yields a slice (`&xs`,
   `&mut xs`), `len(s)` returns its length, and `s[i]` reads/writes through it

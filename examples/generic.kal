@@ -1,0 +1,23 @@
+# ユーザー定義のジェネリック enum も使える (prelude 専用ではない)。
+
+enum Pair<T> { Two(T, T) }
+
+fn sum_pair(p: Pair<i64>) -> i64 = match p { Two(a, b) => a + b };
+
+printi(sum_pair(Two(3, 4)));     # => 7
+
+# 型引数名 (T / E) と同じ名前のユーザー enum があっても
+# prelude の Option / Result は壊れない。
+enum E { Stop }
+
+fn maybe(x: i64) -> Result<i64, i64> =
+  if x > 0 then Ok(x) else Err(1);   # 1 = エラーコード
+
+fn val(r: Result<i64, i64>) -> i64 =
+  match r {
+    Ok(v)  => v,
+    Err(e) => 0 - e,                 # エラーは負のコードで表す
+  };
+
+printi(val(maybe(5)));     # => 5
+printi(val(maybe(-1)));    # => -1   (Err(1) → -1)

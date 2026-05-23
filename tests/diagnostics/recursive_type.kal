@@ -1,0 +1,5 @@
+# A by-value recursive type has infinite size; it needs indirection
+# (a reference or slice). Rejected instead of looping forever.
+enum List<T> { Cons(T, List<T>), Nil }
+fn f(l: List<i64>) -> i64 = match l { Cons(h, t) => h, Nil => 0 };
+f(Nil);
