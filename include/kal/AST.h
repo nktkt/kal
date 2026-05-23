@@ -35,6 +35,7 @@ struct Expr {
     ArrayLit,
     Index,
     BoolLit,
+    StringLit,
     MethodCall,
     Return,
     Try,
@@ -51,6 +52,13 @@ using ExprPtr = std::unique_ptr<Expr>;
 struct BoolLitExpr : Expr {
   bool value;
   BoolLitExpr(Span s, bool value) : Expr(Kind::BoolLit, s), value(value) {}
+};
+
+/// 文字列リテラル: `"..."`。value はエスケープ展開済みのバイト列。型は `str`。
+struct StringLitExpr : Expr {
+  std::string value;
+  StringLitExpr(Span s, std::string value)
+      : Expr(Kind::StringLit, s), value(std::move(value)) {}
 };
 
 /// 数値リテラル。整数か小数かを保持し、型は Sema が文脈から決める。
@@ -271,6 +279,8 @@ struct CallExpr : Expr {
   bool isVecBuiltin = false;
   // Sema が、これが組み込み push(v, x) なら設定する (v に x を追加・v は可変借用)
   bool isPushBuiltin = false;
+  // Sema が、これが組み込み prints(s) なら設定する (str を出力)
+  bool isPrintsBuiltin = false;
   // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
   std::vector<Type> typeArgs;
   CallExpr(Span s, std::string callee, Span calleeSpan,

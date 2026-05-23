@@ -1,0 +1,2 @@
+# prints takes a str, not an integer.
+prints(42);

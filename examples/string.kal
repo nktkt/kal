@@ -1,0 +1,44 @@
+# 文字列リテラルと str 型。
+#   "..."        UTF-8 バイト列への読み取り専用ビュー (型は str、Copy)
+#   prints(s)    str を出力する (改行は付けない。\n は自分で書く)
+#   len(s)       バイト長
+#   s[i]         i 番目のバイト (u8。実行時境界チェックつき)
+# str は静的データを指す fat ポインタ {ptr, len} なので所有もコピーも軽量
+# (ヒープ確保なし)。改行・タブなどはエスケープ \n \t \r \\ \" \0 で書く。
+
+prints("Hello, Kal!\n");
+
+# 変数に束縛して使う。
+{
+  let s: str = "world";
+  prints("hi ");
+  prints(s);
+  prints("\n");
+  printi(len(s));         # => 5
+};
+
+# len はバイト長 (マルチバイト UTF-8 もバイト単位)。
+printi(len("héllo"));     # => 6   (é は 2 バイト)
+
+# 添字で生バイト (u8) を取り出す。
+{
+  let s: str = "ABC";
+  printi(s[0] as i64);    # => 65  ('A')
+  printi(s[2] as i64);    # => 67  ('C')
+};
+
+# 関数の引数・struct のフィールドとしても使える。
+fn greet(name: str) -> () = {
+  prints("Hi, ");
+  prints(name);
+  prints("!\n");
+};
+greet("Ada");
+
+struct Person { name: str, age: i64 }
+{
+  let p: Person = Person { name: "Grace", age: 36 };
+  prints(p.name);
+  prints("\n");
+  printi(p.age);          # => 36
+};

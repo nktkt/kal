@@ -31,6 +31,7 @@ enum class Tok {
   // 主要トークン
   Identifier,
   Number,
+  StrLit, // "..." (text にエスケープ展開済みの中身)
   // 演算子・記号
   Plus,
   Minus,

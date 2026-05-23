@@ -74,8 +74,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 **`struct`s** and **`enum`s** (algebraic data types) — both optionally
 **generic** (`Name<T, …>`, with `Option<T>` / `Result<T, E>` built in) —
 **tuples** `(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`,
-**references** `&T` / `&mut T`, the heap-allocated **`Box<T>`**, and the growable
-**`Vec<T>`**.
+**references** `&T` / `&mut T`, the heap-allocated **`Box<T>`**, the growable
+**`Vec<T>`**, and string slices **`str`**.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 Boolean literals are `true` and `false`.
@@ -425,11 +425,28 @@ on a `Vec<Box<_>>` is rejected) — read `Copy` elements or borrow instead.
 > `push` (which may reallocate); the borrow checker (future work) will enforce
 > this. Both are memory-*safe* (a temporary leaks; neither double-frees).
 
+### Strings (`str`)
+
+A string literal `"..."` has type `str` — a read-only view of UTF-8 bytes
+(`{ptr, len}`, like a slice). It points at static data, so `str` is `Copy` and
+never allocates or needs dropping. Escapes are `\n \t \r \0 \\ \"`.
+
+```
+prints("Hello\n");          # prints(s): write a str (no trailing newline)
+let s: str = "world";
+len(s);                     # => 5   (byte length; UTF-8 counts bytes)
+s[0];                       # => 'w' as u8 (bounds-checked byte access)
+```
+
+`str` works as a variable, parameter, return type, field, payload, etc.
+Equality (`==`), concatenation, and an owned/growable `String` are not built yet.
+
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
 - `putchard(x: i64)` — write the character with code `x` (`putchard(10)` is a newline)
-- `len(s: &[T] | Vec<T>) -> i64` — the length of a slice or `Vec`
+- `prints(s: str)` — write a string's bytes (no trailing newline)
+- `len(s: &[T] | Vec<T> | str) -> i64` — the length of a slice, `Vec`, or `str` (bytes)
 - `box(x: T) -> Box<T>` — move `x` onto the heap
 - `vec() -> Vec<T>` — a new empty growable array (element type from context)
 - `push(v: Vec<T>, x: T)` — append `x` to a mutable `Vec` (grows as needed)

@@ -1,0 +1,6 @@
+error[E0004]: 不明なエスケープシーケンス '\q' です
+ --> tests/diagnostics/unknown_escape.kal:2:13
+  |
+2 | prints("bad \q escape");
+  |             ^^
+1 個のエラーで中断しました

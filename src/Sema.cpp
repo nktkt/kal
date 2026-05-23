@@ -170,6 +170,8 @@ bool Sema::run(Program &program) {
       diag_.error(sd->nameSpan, "E0049", "Box は組み込み型です");
     if (sd->name == "Vec")
       diag_.error(sd->nameSpan, "E0050", "Vec は組み込み型です");
+    if (sd->name == "str")
+      diag_.error(sd->nameSpan, "E0052", "str は組み込み型です");
     if (structs_.count(sd->name))
       diag_.error(sd->nameSpan, "E0045", "構造体が重複定義されています");
     structs_[sd->name] = sd.get();
@@ -179,6 +181,8 @@ bool Sema::run(Program &program) {
       diag_.error(ed->nameSpan, "E0049", "Box は組み込み型です");
     if (ed->name == "Vec")
       diag_.error(ed->nameSpan, "E0050", "Vec は組み込み型です");
+    if (ed->name == "str")
+      diag_.error(ed->nameSpan, "E0052", "str は組み込み型です");
     if (enums_.count(ed->name) || structs_.count(ed->name))
       diag_.error(ed->nameSpan, "E0085", "型名が重複しています");
     enums_[ed->name] = ed.get();
@@ -594,6 +598,9 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
   case Expr::Kind::BoolLit:
     t = Type::boolean();
     break;
+  case Expr::Kind::StringLit:
+    t = Type::strTy();
+    break;
   case Expr::Kind::MethodCall:
     t = checkMethodCall(static_cast<MethodCallExpr *>(e));
     break;
@@ -740,11 +747,30 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
       return Type::intTy(64, true);
     }
     Type at = check(e->args[0].get(), std::nullopt);
-    if (at.isKnown() && !at.isSlice() && !at.isVec())
+    if (at.isKnown() && !at.isSlice() && !at.isVec() && !at.isStr())
       diag_.error(e->args[0]->span, "E0109",
-                  "len の引数はスライスか Vec である必要があります (実際 " +
+                  "len の引数はスライス・Vec・str である必要があります (実際 " +
                       at.str() + ")");
     return Type::intTy(64, true);
+  }
+
+  // 組み込み prints(s: str) -> () (str を出力。改行は付けない)
+  if (e->callee == "prints" && !funcs_.count("prints")) {
+    e->isPrintsBuiltin = true;
+    if (e->args.size() != 1) {
+      diag_.error(e->span, "E0256",
+                  "prints には引数が 1 つ必要です (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unit();
+    }
+    Type at = check(e->args[0].get(), Type::strTy());
+    if (at.isKnown() && !at.isStr())
+      diag_.error(e->args[0]->span, "E0257",
+                  "prints の引数は str である必要があります (実際 " + at.str() +
+                      ")");
+    return Type::unit();
   }
 
   // 組み込み vec() -> Vec<T> (空。要素型 T は期待型から推論)
@@ -1333,11 +1359,13 @@ Type Sema::checkIndex(IndexExpr *e) {
   if (it.isKnown() && !it.isInt())
     diag_.error(e->index->span, "E0192",
                 "添字には整数型が必要です (実際 " + it.str() + ")");
+  if (bt.isStr())
+    return Type::intTy(8, false); // str の添字は u8 (バイト)
   if (!bt.isArray() && !bt.isSlice() && !bt.isVec()) {
     if (bt.isKnown())
       diag_.error(e->base->span, "E0193",
-                  "配列・スライス・Vec ではないものに添字アクセスしています "
-                  "(実際 " +
+                  "配列・スライス・Vec・str ではないものに添字アクセスして"
+                  "います (実際 " +
                       bt.str() + ")");
     return Type::unknown();
   }

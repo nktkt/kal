@@ -13,6 +13,7 @@ bool MoveCheck::isCopy(const Type &t) const {
   case Type::Kind::Float:
   case Type::Kind::Bool:
   case Type::Kind::Unit:
+  case Type::Kind::Str:     // str は静的データへの fat ポインタ (コピー)
   case Type::Kind::Unknown: // エラー型は誤検出を避けてコピー扱い
     return true;
   case Type::Kind::Ref:
@@ -70,6 +71,7 @@ void MoveCheck::use(const Expr *e) {
   switch (e->kind) {
   case Expr::Kind::Number:
   case Expr::Kind::BoolLit:
+  case Expr::Kind::StringLit:
     return;
   case Expr::Kind::Variable: {
     auto *v = static_cast<const VariableExpr *>(e);

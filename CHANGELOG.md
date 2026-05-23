@@ -5,6 +5,14 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Strings (`str`):** string literals `"..."` (escapes `\n \t \r \0 \\ \"`) of
+  type `str` — a read-only `{ptr, len}` view of UTF-8 bytes in static data, so
+  `str` is `Copy` and never allocates or drops. `prints(s)` writes the bytes,
+  `len(s)` is the byte length, `s[i]` is a bounds-checked byte (`u8`). Works as a
+  variable / parameter / field / payload / generic argument. JIT and AOT emit
+  byte-identical output (incl. embedded `\0`). Diagnostics `E0003`/`E0004`
+  (lexer), `E0052`, `E0256`/`E0257`. (Equality, concatenation, and an owned
+  `String` are not built yet.)
 - **`Vec<T>` (growable array):** a heap-backed dynamic array. `vec()` creates an
   empty one (element type inferred from the annotation), `push(v, x)` appends
   (reallocating, doubling capacity), `len(v)` is the length, and `v[i]`

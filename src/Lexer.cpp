@@ -40,6 +40,52 @@ Token Lexer::next() {
 
   char c = buf_[pos_];
 
+  // 文字列リテラル "..." (エスケープを展開して text に格納)
+  if (c == '"') {
+    ++pos_; // 開き "
+    std::string value;
+    bool terminated = false;
+    while (pos_ < buf_.size()) {
+      char ch = buf_[pos_];
+      if (ch == '"') {
+        ++pos_;
+        terminated = true;
+        break;
+      }
+      if (ch == '\n')
+        break; // 行内で閉じていない → 未終端
+      if (ch == '\\') {
+        ++pos_;
+        if (pos_ >= buf_.size())
+          break;
+        char esc = buf_[pos_];
+        switch (esc) {
+        case 'n': value += '\n'; break;
+        case 't': value += '\t'; break;
+        case 'r': value += '\r'; break;
+        case '0': value += '\0'; break;
+        case '\\': value += '\\'; break;
+        case '"': value += '"'; break;
+        default: {
+          std::string msg = "不明なエスケープシーケンス '\\";
+          msg += esc;
+          msg += "' です";
+          diag_.error({fileId_, pos_ - 1, pos_ + 1}, "E0004", msg);
+        }
+        }
+        ++pos_;
+        continue;
+      }
+      value += ch;
+      ++pos_;
+    }
+    if (!terminated)
+      diag_.error({fileId_, start, pos_}, "E0003",
+                  "文字列リテラルが閉じていません ('\"' が必要)");
+    t.text = std::move(value);
+    return make(Tok::StrLit);
+  }
+
   // 識別子 / キーワード
   if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
     while (pos_ < buf_.size() &&

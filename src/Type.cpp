@@ -48,6 +48,8 @@ std::string Type::str() const {
     return "Box<" + elems[0].str() + ">";
   case Kind::Vec:
     return "Vec<" + elems[0].str() + ">";
+  case Kind::Str:
+    return "str";
   }
   return "<?>";
 }
@@ -95,6 +97,10 @@ bool kal::typeFromName(llvm::StringRef name, Type &out) {
   }
   if (name == "f64") {
     out = Type::floatTy(64);
+    return true;
+  }
+  if (name == "str") {
+    out = Type::strTy();
     return true;
   }
   return false;

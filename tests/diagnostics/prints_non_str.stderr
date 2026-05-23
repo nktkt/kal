@@ -1,0 +1,6 @@
+error[E0257]: prints の引数は str である必要があります (実際 i32)
+ --> tests/diagnostics/prints_non_str.kal:2:8
+  |
+2 | prints(42);
+  |        ^^
+1 個のエラーで中断しました

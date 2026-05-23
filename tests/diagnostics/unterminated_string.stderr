@@ -1,0 +1,11 @@
+error[E0002]: 式が必要です
+ --> tests/diagnostics/unterminated_string.kal:2:1
+  |
+2 | let s: str = "no closing quote;
+  | ^^^
+error[E0003]: 文字列リテラルが閉じていません ('"' が必要)
+ --> tests/diagnostics/unterminated_string.kal:2:14
+  |
+2 | let s: str = "no closing quote;
+  |              ^^^^^^^^^^^^^^^^^^
+2 個のエラーで中断しました

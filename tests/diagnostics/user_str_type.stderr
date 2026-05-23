@@ -1,0 +1,6 @@
+error[E0052]: str は組み込み型です
+ --> tests/diagnostics/user_str_type.kal:2:8
+  |
+2 | struct str { x: i64 }
+  |        ^^^
+1 個のエラーで中断しました

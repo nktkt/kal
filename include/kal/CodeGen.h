@@ -54,6 +54,7 @@ private:
   llvm::StructType *vecLLVMTy();
   llvm::Value *genVecNew(const CallExpr *e); // 組み込み vec(): 空の Vec を作る
   llvm::Value *genPush(const CallExpr *e);   // 組み込み push(v, x): 末尾に追加
+  llvm::Value *genStringLit(const StringLitExpr *e); // "..." → {ptr, len}
   // 現在のブロックが終端命令を持つ (return 等で発散した) か。
   bool blockDone();
   llvm::Value *genMatch(const MatchExpr *e);

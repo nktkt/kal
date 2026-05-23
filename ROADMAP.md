@@ -147,8 +147,11 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   ✅ `Box<T>` (via `box(e)`) and **Drop/RAII** landed — boxes are freed
   automatically (drop flags for moves; recurses into aggregates).
   ✅ `Vec<T>` (growable array) landed — `vec()`/`push`/`len`/`v[i]`, capacity
-  doubling via `realloc`, element-aware Drop. `String`/`HashMap` build on this
-  next. (Remaining: `pop`/iteration, dropping discarded temporaries.)
+  doubling via `realloc`, element-aware Drop.
+  ✅ String literals + `str` landed — a `Copy` `{ptr,len}` view of static UTF-8
+  (`prints`/`len`/`s[i]`). Next: an owned/growable `String` (`Vec<u8>`-backed,
+  concatenation), then `HashMap`. (Remaining: `Vec::pop`/iteration, dropping
+  discarded temporaries.)
 - `Option<T>` / `Result<T,E>` and the `?` operator — ✅ done (prelude types +
   early `return` and `?`). (Heap-backed collections still pending.)
 - Iterators and closures.

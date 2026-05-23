@@ -374,6 +374,11 @@ ExprPtr Parser::parsePrimary() {
     advance();
     return e;
   }
+  case Tok::StrLit: {
+    auto e = std::make_unique<StringLitExpr>(cur_.span, cur_.text);
+    advance();
+    return e;
+  }
   case Tok::SelfKw: { // メソッド本体での self は変数参照
     auto e = std::make_unique<VariableExpr>(cur_.span, "self");
     advance();

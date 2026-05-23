@@ -130,6 +130,10 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &rawT) {
     return PointerType::getUnqual(ctx_); // ヒープへのポインタ
   case kal::Type::Kind::Vec:
     return vecLLVMTy(); // { ptr, i64 len, i64 cap }
+  case kal::Type::Kind::Str:
+    // str = 静的バイト列への fat pointer { ptr, i64 len } (スライスと同形)
+    return StructType::get(
+        ctx_, {PointerType::getUnqual(ctx_), llvm::Type::getInt64Ty(ctx_)});
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
@@ -267,6 +271,8 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genIndex(static_cast<const IndexExpr *>(e));
   case Expr::Kind::BoolLit:
     return builder_.getInt1(static_cast<const BoolLitExpr *>(e)->value);
+  case Expr::Kind::StringLit:
+    return genStringLit(static_cast<const StringLitExpr *>(e));
   case Expr::Kind::MethodCall:
     return genMethodCall(static_cast<const MethodCallExpr *>(e));
   case Expr::Kind::Return:
@@ -660,14 +666,17 @@ Value *CodeGen::genAddr(const Expr *e) {
     auto *ix = static_cast<const IndexExpr *>(e);
     Value *idx = genExpr(ix->index.get());
     llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
-    if (ix->base->type.isSlice() || ix->base->type.isVec()) {
-      // スライス {ptr,len} / Vec {ptr,len,cap}: どちらも添字 0=ポインタ・1=長さ。
-      // 先頭ポインタから要素型で GEP {idx}。
+    if (ix->base->type.isSlice() || ix->base->type.isVec() ||
+        ix->base->type.isStr()) {
+      // スライス {ptr,len} / Vec {ptr,len,cap} / str {ptr,len}: いずれも添字
+      // 0=ポインタ・1=長さ。先頭ポインタから要素型で GEP {idx}。
       Value *s = genExpr(ix->base.get());
       Value *data = builder_.CreateExtractValue(s, {0}, "dataptr");
       Value *len = builder_.CreateExtractValue(s, {1}, "datalen");
       emitBoundsCheck(idx, ix->index->type, len); // 境界チェック
-      llvm::Type *elemTy = toLLVM(ix->base->type.elemType());
+      llvm::Type *elemTy = ix->base->type.isStr()
+                               ? llvm::Type::getInt8Ty(ctx_) // str の要素は u8
+                               : toLLVM(ix->base->type.elemType());
       return builder_.CreateGEP(elemTy, data, {idx}, "elemptr");
     }
     // 配列 [N x T]: アドレスから GEP {0, idx}
@@ -831,9 +840,17 @@ Value *CodeGen::genCall(const CallExpr *e) {
     return nullptr; // 引数の評価が発散
   if (e->variantTag >= 0) // enum バリアント構築
     return genVariant(e->type, e->variantTag, args);
-  // 組み込み len(s): スライス {ptr, len} の len フィールドを取り出す
+  // 組み込み len(s): fat pointer {ptr, len} の len フィールドを取り出す
+  // (スライス・Vec・str いずれも添字 1 が長さ)
   if (e->isLenBuiltin)
     return builder_.CreateExtractValue(args[0], {1}, "len");
+  // 組み込み prints(s): str {ptr, len} を分解して kal_prints(ptr, len) を呼ぶ
+  if (e->isPrintsBuiltin) {
+    Value *data = builder_.CreateExtractValue(args[0], {0}, "strptr");
+    Value *len = builder_.CreateExtractValue(args[0], {1}, "strlen");
+    builder_.CreateCall(module_->getFunction("kal_prints"), {data, len});
+    return nullptr; // unit
+  }
   // 組み込み box(e): ヒープに確保して中身を書き込み、ポインタ (Box) を返す
   if (e->isBoxBuiltin) {
     llvm::Type *elemTy = toLLVM(e->args[0]->type); // typeSubst_ で具体化済み
@@ -1121,6 +1138,22 @@ Value *CodeGen::genTry(const TryExpr *e) {
   Value *pv = builder_.CreateLoad(
       okVs, builder_.CreateStructGEP(et, slot, 1, "okptr"), "okld");
   return builder_.CreateExtractValue(pv, {0u}, "tryval");
+}
+
+// 文字列リテラル: バイト列を読み取り専用グローバルに置き、{ptr, len} を返す。
+Value *CodeGen::genStringLit(const StringLitExpr *e) {
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  Constant *data = ConstantDataArray::getString(ctx_, e->value,
+                                                /*AddNull=*/false);
+  auto *gv = new GlobalVariable(*module_, data->getType(), /*isConstant=*/true,
+                                GlobalValue::PrivateLinkage, data, "str");
+  gv->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+  StructType *st = cast<StructType>(toLLVM(kal::Type::strTy())); // { ptr, i64 }
+  Value *agg = UndefValue::get(st);
+  agg = builder_.CreateInsertValue(agg, gv, {0}); // 不透明 ptr = 先頭バイト
+  agg = builder_.CreateInsertValue(
+      agg, ConstantInt::get(i64, e->value.size()), {1});
+  return agg;
 }
 
 // 組み込み vec(): 空の Vec { null, 0, 0 } を返す (容量は最初の push で確保)。
@@ -1478,6 +1511,8 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   ensure("free", voidTy, {PointerType::getUnqual(ctx_)}); // Drop のヒープ解放
   ensure("realloc", PointerType::getUnqual(ctx_),
          {PointerType::getUnqual(ctx_), i64}); // Vec の成長
+  ensure("kal_prints", voidTy,
+         {PointerType::getUnqual(ctx_), i64}); // str の出力
 
   // (2) 関数本体 (非総称のみ。ジェネリックは呼び出しから単態化される)
   for (auto &f : program.functions)
@@ -1603,6 +1638,32 @@ void CodeGen::emitRuntimeDefs() {
     Function *fn = body("putchard");
     Value *c = builder_.CreateTrunc(fn->getArg(0), i32, "c");
     builder_.CreateCall(putcharFn, {c});
+    builder_.CreateRetVoid();
+    verifyFunction(*fn);
+  }
+  // kal_prints(ptr s, i64 n): putchar で s[0..n) を 1 バイトずつ出力する。
+  // putchar はバッファ付き stdout を使う (printi/putchard と同じ) ため出力順が
+  // 正しく、`%.*s` と違い埋め込み '\0' でも途切れない (JIT の fwrite と一致)。
+  {
+    Function *fn = body("kal_prints");
+    Value *s = fn->getArg(0);
+    Value *n = fn->getArg(1);
+    BasicBlock *cond = BasicBlock::Create(ctx_, "ps.cond", fn);
+    BasicBlock *bodyBB = BasicBlock::Create(ctx_, "ps.body", fn);
+    BasicBlock *end = BasicBlock::Create(ctx_, "ps.end", fn);
+    AllocaInst *iSlot = builder_.CreateAlloca(i64, nullptr, "i");
+    builder_.CreateStore(ConstantInt::get(i64, 0), iSlot);
+    builder_.CreateBr(cond);
+    builder_.SetInsertPoint(cond);
+    Value *i = builder_.CreateLoad(i64, iSlot, "i");
+    builder_.CreateCondBr(builder_.CreateICmpULT(i, n, "more"), bodyBB, end);
+    builder_.SetInsertPoint(bodyBB);
+    Value *bp = builder_.CreateGEP(llvm::Type::getInt8Ty(ctx_), s, {i}, "bp");
+    Value *b = builder_.CreateLoad(llvm::Type::getInt8Ty(ctx_), bp, "b");
+    builder_.CreateCall(putcharFn, {builder_.CreateZExt(b, i32, "bc")});
+    builder_.CreateStore(builder_.CreateAdd(i, ConstantInt::get(i64, 1)), iSlot);
+    builder_.CreateBr(cond);
+    builder_.SetInsertPoint(end);
     builder_.CreateRetVoid();
     verifyFunction(*fn);
   }
