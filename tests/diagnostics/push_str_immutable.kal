@@ -1,0 +1,2 @@
+# push_str needs a mutable String (declared `let mut`).
+{ let s: String = string("a"); push_str(s, "b"); };

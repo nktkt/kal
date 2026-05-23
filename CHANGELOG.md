@@ -5,6 +5,14 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Owned `String`:** a heap-backed, growable UTF-8 string (`{ptr, len, cap}` ≈
+  `Vec<u8>`). `string(s)` copies a `str` onto the heap, `push_str(s, t)` appends
+  a `str` (reallocating to `max(cap*2, needed)`), and a `String` owns its buffer
+  so Drop frees it. `prints`/`len`/`s[i]` accept both `str` and `String`;
+  `str` stays read-only (`s[i] = …` is rejected). Works as a field / payload /
+  `Vec<String>` / generic argument; idiomatic (bound) use is leak-free, JIT and
+  AOT agree. Diagnostics `E0258`/`E0259`/`E0261`–`E0264`. (Equality, `+`
+  concatenation, and `String`→`str` coercion are still future work.)
 - **Strings (`str`):** string literals `"..."` (escapes `\n \t \r \0 \\ \"`) of
   type `str` — a read-only `{ptr, len}` view of UTF-8 bytes in static data, so
   `str` is `Copy` and never allocates or drops. `prints(s)` writes the bytes,

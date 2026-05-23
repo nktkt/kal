@@ -172,6 +172,8 @@ bool Sema::run(Program &program) {
       diag_.error(sd->nameSpan, "E0050", "Vec は組み込み型です");
     if (sd->name == "str")
       diag_.error(sd->nameSpan, "E0052", "str は組み込み型です");
+    if (sd->name == "String")
+      diag_.error(sd->nameSpan, "E0258", "String は組み込み型です");
     if (structs_.count(sd->name))
       diag_.error(sd->nameSpan, "E0045", "構造体が重複定義されています");
     structs_[sd->name] = sd.get();
@@ -183,6 +185,8 @@ bool Sema::run(Program &program) {
       diag_.error(ed->nameSpan, "E0050", "Vec は組み込み型です");
     if (ed->name == "str")
       diag_.error(ed->nameSpan, "E0052", "str は組み込み型です");
+    if (ed->name == "String")
+      diag_.error(ed->nameSpan, "E0258", "String は組み込み型です");
     if (enums_.count(ed->name) || structs_.count(ed->name))
       diag_.error(ed->nameSpan, "E0085", "型名が重複しています");
     enums_[ed->name] = ed.get();
@@ -747,14 +751,15 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
       return Type::intTy(64, true);
     }
     Type at = check(e->args[0].get(), std::nullopt);
-    if (at.isKnown() && !at.isSlice() && !at.isVec() && !at.isStr())
+    if (at.isKnown() && !at.isSlice() && !at.isVec() && !at.isStringish())
       diag_.error(e->args[0]->span, "E0109",
-                  "len の引数はスライス・Vec・str である必要があります (実際 " +
+                  "len の引数はスライス・Vec・str・String である必要があります "
+                  "(実際 " +
                       at.str() + ")");
     return Type::intTy(64, true);
   }
 
-  // 組み込み prints(s: str) -> () (str を出力。改行は付けない)
+  // 組み込み prints(s: str | String) -> () (出力。改行は付けない)
   if (e->callee == "prints" && !funcs_.count("prints")) {
     e->isPrintsBuiltin = true;
     if (e->args.size() != 1) {
@@ -766,10 +771,58 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
       return Type::unit();
     }
     Type at = check(e->args[0].get(), Type::strTy());
-    if (at.isKnown() && !at.isStr())
+    if (at.isKnown() && !at.isStringish())
       diag_.error(e->args[0]->span, "E0257",
-                  "prints の引数は str である必要があります (実際 " + at.str() +
+                  "prints の引数は str か String である必要があります (実際 " +
+                      at.str() + ")");
+    return Type::unit();
+  }
+
+  // 組み込み string(s: str) -> String (str を所有 String にコピー)
+  if (e->callee == "string" && !funcs_.count("string")) {
+    e->isStringBuiltin = true;
+    if (e->args.size() != 1) {
+      diag_.error(e->span, "E0259",
+                  "string には引数が 1 つ必要です (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::stringTy();
+    }
+    Type at = check(e->args[0].get(), Type::strTy());
+    // str のみ受け付ける。String を渡すと元バッファがリークする (clone 未実装)。
+    if (at.isKnown() && !at.isStr())
+      diag_.error(e->args[0]->span, "E0259",
+                  "string の引数は str である必要があります (実際 " + at.str() +
                       ")");
+    return Type::stringTy();
+  }
+
+  // 組み込み push_str(s: String, t: str) -> () (可変 String に str を追記)
+  if (e->callee == "push_str" && !funcs_.count("push_str")) {
+    e->isPushStrBuiltin = true;
+    if (e->args.size() != 2) {
+      diag_.error(e->span, "E0261",
+                  "push_str には引数が 2 つ必要です (push_str(s, t)。実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unit();
+    }
+    Type st = check(e->args[0].get(), std::nullopt);
+    if (st.isKnown() && !st.isString())
+      diag_.error(e->args[0]->span, "E0262",
+                  "push_str の第 1 引数は String である必要があります (実際 " +
+                      st.str() + ")");
+    else if (st.isString() && !isMutablePlace(e->args[0].get()))
+      diag_.error(e->args[0]->span, "E0263",
+                  "push_str の第 1 引数は可変な場所である必要があります "
+                  "(`let mut s` で宣言してください)");
+    Type tt = check(e->args[1].get(), Type::strTy());
+    if (tt.isKnown() && !tt.isStringish())
+      diag_.error(e->args[1]->span, "E0264",
+                  "push_str の第 2 引数は str である必要があります (実際 " +
+                      tt.str() + ")");
     return Type::unit();
   }
 
@@ -1255,10 +1308,14 @@ bool Sema::isMutablePlace(const Expr *e) {
     return isMutablePlace(static_cast<const TupleIndexExpr *>(e)->operand.get());
   case Expr::Kind::Index: {
     auto *ix = static_cast<const IndexExpr *>(e);
+    // str は読み取り専用 (静的データを指す) ので要素代入は不可。
+    if (ix->base->type.isStr())
+      return false;
     // スライス越しの書き込みは &mut [T] のときのみ可 (束縛の mut とは独立)。
     if (ix->base->type.isSlice())
       return ix->base->type.refMut;
-    return isMutablePlace(ix->base.get()); // 配列: ベースが可変なら可変
+    // 配列 / Vec / String: ベースが可変なら可変。
+    return isMutablePlace(ix->base.get());
   }
   default:
     return false;
@@ -1359,13 +1416,13 @@ Type Sema::checkIndex(IndexExpr *e) {
   if (it.isKnown() && !it.isInt())
     diag_.error(e->index->span, "E0192",
                 "添字には整数型が必要です (実際 " + it.str() + ")");
-  if (bt.isStr())
-    return Type::intTy(8, false); // str の添字は u8 (バイト)
+  if (bt.isStringish())
+    return Type::intTy(8, false); // str / String の添字は u8 (バイト)
   if (!bt.isArray() && !bt.isSlice() && !bt.isVec()) {
     if (bt.isKnown())
       diag_.error(e->base->span, "E0193",
-                  "配列・スライス・Vec・str ではないものに添字アクセスして"
-                  "います (実際 " +
+                  "配列・スライス・Vec・str・String ではないものに添字アクセス"
+                  "しています (実際 " +
                       bt.str() + ")");
     return Type::unknown();
   }

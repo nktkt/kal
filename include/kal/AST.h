@@ -279,8 +279,12 @@ struct CallExpr : Expr {
   bool isVecBuiltin = false;
   // Sema が、これが組み込み push(v, x) なら設定する (v に x を追加・v は可変借用)
   bool isPushBuiltin = false;
-  // Sema が、これが組み込み prints(s) なら設定する (str を出力)
+  // Sema が、これが組み込み prints(s) なら設定する (str/String を出力)
   bool isPrintsBuiltin = false;
+  // Sema が、これが組み込み string(s) なら設定する (str から所有 String を作る)
+  bool isStringBuiltin = false;
+  // Sema が、これが組み込み push_str(s, t) なら設定する (String に str を追記)
+  bool isPushStrBuiltin = false;
   // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
   std::vector<Type> typeArgs;
   CallExpr(Span s, std::string callee, Span calleeSpan,

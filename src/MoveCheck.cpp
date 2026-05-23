@@ -113,14 +113,19 @@ void MoveCheck::use(const Expr *e) {
     return;
   case Expr::Kind::Call: {
     auto *c = static_cast<const CallExpr *>(e);
-    if (c->isLenBuiltin) {
+    if (c->isLenBuiltin || c->isPrintsBuiltin) {
       for (auto &a : c->args)
-        requireLive(a.get()); // len は借用: 引数をムーブしない
+        requireLive(a.get()); // len/prints は借用: 引数をムーブしない
       return;
     }
     if (c->isPushBuiltin && c->args.size() == 2) {
       requireLive(c->args[0].get()); // push(v, x): v は可変借用 (ムーブしない)
       use(c->args[1].get());         // x は v にムーブで入る
+      return;
+    }
+    if (c->isPushStrBuiltin && c->args.size() == 2) {
+      requireLive(c->args[0].get()); // push_str(s, t): s は可変借用
+      requireLive(c->args[1].get()); // t は str (Copy) ＝ 借用
       return;
     }
     for (auto &a : c->args)

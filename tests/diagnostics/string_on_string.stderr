@@ -1,0 +1,6 @@
+error[E0259]: string の引数は str である必要があります (実際 String)
+ --> tests/diagnostics/string_on_string.kal:3:56
+  |
+3 | { let s: String = string("hi"); let t: String = string(s); prints(t); };
+  |                                                        ^
+1 個のエラーで中断しました

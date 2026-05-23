@@ -1,0 +1,2 @@
+# String is a built-in type and cannot be redefined.
+struct String { x: i64 }

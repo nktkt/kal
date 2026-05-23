@@ -1,0 +1,6 @@
+error[E0264]: push_str の第 2 引数は str である必要があります (実際 i32)
+ --> tests/diagnostics/push_str_wrong_type.kal:2:48
+  |
+2 | { let mut s: String = string("a"); push_str(s, 42); };
+  |                                                ^^
+1 個のエラーで中断しました

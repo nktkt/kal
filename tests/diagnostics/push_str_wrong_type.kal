@@ -1,0 +1,2 @@
+# push_str's second argument must be a str.
+{ let mut s: String = string("a"); push_str(s, 42); };

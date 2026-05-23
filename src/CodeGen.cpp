@@ -49,6 +49,7 @@ bool CodeGen::needsDrop(const kal::Type &t) {
   switch (t.kind) {
   case kal::Type::Kind::Box:
   case kal::Type::Kind::Vec:
+  case kal::Type::Kind::String:
     return true; // ヒープを所有する (再帰せず即 true → 無限再帰しない)
   case kal::Type::Kind::Tuple:
   case kal::Type::Kind::Array:
@@ -134,6 +135,8 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &rawT) {
     // str = 静的バイト列への fat pointer { ptr, i64 len } (スライスと同形)
     return StructType::get(
         ctx_, {PointerType::getUnqual(ctx_), llvm::Type::getInt64Ty(ctx_)});
+  case kal::Type::Kind::String:
+    return vecLLVMTy(); // String = 所有バイトバッファ { ptr, i64 len, i64 cap }
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
@@ -667,16 +670,17 @@ Value *CodeGen::genAddr(const Expr *e) {
     Value *idx = genExpr(ix->index.get());
     llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
     if (ix->base->type.isSlice() || ix->base->type.isVec() ||
-        ix->base->type.isStr()) {
-      // スライス {ptr,len} / Vec {ptr,len,cap} / str {ptr,len}: いずれも添字
-      // 0=ポインタ・1=長さ。先頭ポインタから要素型で GEP {idx}。
+        ix->base->type.isStringish()) {
+      // スライス {ptr,len} / Vec {ptr,len,cap} / str・String {ptr,len,..}:
+      // いずれも添字 0=ポインタ・1=長さ。先頭ポインタから要素型で GEP {idx}。
       Value *s = genExpr(ix->base.get());
       Value *data = builder_.CreateExtractValue(s, {0}, "dataptr");
       Value *len = builder_.CreateExtractValue(s, {1}, "datalen");
       emitBoundsCheck(idx, ix->index->type, len); // 境界チェック
-      llvm::Type *elemTy = ix->base->type.isStr()
-                               ? llvm::Type::getInt8Ty(ctx_) // str の要素は u8
-                               : toLLVM(ix->base->type.elemType());
+      llvm::Type *elemTy =
+          ix->base->type.isStringish()
+              ? llvm::Type::getInt8Ty(ctx_) // str/String の要素は u8
+              : toLLVM(ix->base->type.elemType());
       return builder_.CreateGEP(elemTy, data, {idx}, "elemptr");
     }
     // 配列 [N x T]: アドレスから GEP {0, idx}
@@ -833,6 +837,8 @@ Value *CodeGen::genCall(const CallExpr *e) {
     return genVecNew(e);
   if (e->isPushBuiltin)
     return genPush(e);
+  if (e->isPushStrBuiltin)
+    return genPushStr(e); // push_str(s, t): s を場所として扱う
   std::vector<Value *> args;
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
@@ -844,12 +850,27 @@ Value *CodeGen::genCall(const CallExpr *e) {
   // (スライス・Vec・str いずれも添字 1 が長さ)
   if (e->isLenBuiltin)
     return builder_.CreateExtractValue(args[0], {1}, "len");
-  // 組み込み prints(s): str {ptr, len} を分解して kal_prints(ptr, len) を呼ぶ
+  // 組み込み prints(s): str/String {ptr, len, ..} を分解して kal_prints を呼ぶ
   if (e->isPrintsBuiltin) {
     Value *data = builder_.CreateExtractValue(args[0], {0}, "strptr");
     Value *len = builder_.CreateExtractValue(args[0], {1}, "strlen");
     builder_.CreateCall(module_->getFunction("kal_prints"), {data, len});
     return nullptr; // unit
+  }
+  // 組み込み string(s): str のバイトをヒープにコピーして所有 String を作る
+  if (e->isStringBuiltin) {
+    llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+    Value *src = builder_.CreateExtractValue(args[0], {0}, "srcptr");
+    Value *len = builder_.CreateExtractValue(args[0], {1}, "srclen");
+    Value *buf = builder_.CreateCall(module_->getFunction("malloc"), {len},
+                                     "strbuf");
+    builder_.CreateMemCpy(buf, MaybeAlign(1), src, MaybeAlign(1), len);
+    StructType *vt = vecLLVMTy();
+    Value *agg = UndefValue::get(vt);
+    agg = builder_.CreateInsertValue(agg, buf, {0});
+    agg = builder_.CreateInsertValue(agg, len, {1}); // len
+    agg = builder_.CreateInsertValue(agg, len, {2}); // cap = len
+    return agg;
   }
   // 組み込み box(e): ヒープに確保して中身を書き込み、ポインタ (Box) を返す
   if (e->isBoxBuiltin) {
@@ -956,6 +977,13 @@ void CodeGen::genDropBody(const kal::Type &t, llvm::Function *fn) {
       builder_.SetInsertPoint(end);
     }
     builder_.CreateCall(module_->getFunction("free"), {data}); // free(null) は安全
+  } else if (t.isString()) {
+    // String はバイト列 (drop 不要の u8)。バッファを free するだけ。
+    StructType *vt = vecLLVMTy();
+    Value *data = builder_.CreateLoad(
+        PointerType::getUnqual(ctx_), builder_.CreateStructGEP(vt, p, 0, "sp"),
+        "sdata");
+    builder_.CreateCall(module_->getFunction("free"), {data});
   } else if (t.isTuple() || t.isArray()) {
     llvm::Type *aggTy = toLLVM(t);
     size_t n = t.isArray() ? t.arrayLen : t.elems.size();
@@ -1217,6 +1245,56 @@ Value *CodeGen::genPush(const CallExpr *e) {
   builder_.CreateStore(x, slot);
   builder_.CreateStore(builder_.CreateAdd(len, ConstantInt::get(i64, 1), "len1"),
                        lenPtr);
+  return nullptr; // unit
+}
+
+// 組み込み push_str(s, t): 可変 String s の末尾に str t のバイトを追記する。
+// 容量が足りなければ「現容量×2」と「必要量」の大きい方へ realloc する。
+Value *CodeGen::genPushStr(const CallExpr *e) {
+  Value *sPtr = genAddr(e->args[0].get()); // String{ptr,len,cap} の場所
+  if (blockDone())
+    return nullptr;
+  Value *t = genExpr(e->args[1].get()); // 追記する str {ptr, len}
+  if (blockDone())
+    return nullptr;
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+  StructType *vt = vecLLVMTy();
+  Value *tData = builder_.CreateExtractValue(t, {0}, "tdata");
+  Value *tLen = builder_.CreateExtractValue(t, {1}, "tlen");
+
+  Value *dataPtr = builder_.CreateStructGEP(vt, sPtr, 0, "sdata");
+  Value *lenPtr = builder_.CreateStructGEP(vt, sPtr, 1, "slen");
+  Value *capPtr = builder_.CreateStructGEP(vt, sPtr, 2, "scap");
+  Value *len = builder_.CreateLoad(i64, lenPtr, "len");
+  Value *cap = builder_.CreateLoad(i64, capPtr, "cap");
+  Value *need = builder_.CreateAdd(len, tLen, "need"); // 追記後の必要長
+
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock *growBB = BasicBlock::Create(ctx_, "str.grow", fn);
+  BasicBlock *contBB = BasicBlock::Create(ctx_, "str.cont", fn);
+  builder_.CreateCondBr(builder_.CreateICmpUGT(need, cap, "tooSmall"), growBB,
+                        contBB);
+
+  // 成長: max(cap*2, need) を新容量にして realloc
+  builder_.SetInsertPoint(growBB);
+  Value *dbl = builder_.CreateMul(cap, ConstantInt::get(i64, 2), "cap2");
+  Value *bigger = builder_.CreateICmpUGT(need, dbl, "needBigger");
+  Value *newCap = builder_.CreateSelect(bigger, need, dbl, "newcap");
+  Value *oldData = builder_.CreateLoad(ptrTy, dataPtr, "olddata");
+  Value *newData = builder_.CreateCall(module_->getFunction("realloc"),
+                                       {oldData, newCap}, "newdata");
+  builder_.CreateStore(newData, dataPtr);
+  builder_.CreateStore(newCap, capPtr);
+  builder_.CreateBr(contBB);
+
+  // 追記: memcpy(data + len, tData, tLen); len = need
+  builder_.SetInsertPoint(contBB);
+  Value *data = builder_.CreateLoad(ptrTy, dataPtr, "data");
+  Value *dst = builder_.CreateGEP(llvm::Type::getInt8Ty(ctx_), data, {len},
+                                  "tail");
+  builder_.CreateMemCpy(dst, MaybeAlign(1), tData, MaybeAlign(1), tLen);
+  builder_.CreateStore(need, lenPtr);
   return nullptr; // unit
 }
 

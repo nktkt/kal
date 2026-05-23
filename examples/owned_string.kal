@@ -1,0 +1,46 @@
+# 所有・可変な String 型 (ヒープ上の伸長可能な UTF-8 バッファ ≒ Vec<u8>)。
+#   string(s)      str を所有 String にコピーする
+#   push_str(s, t) 可変な String s の末尾に str t を追記 (足りなければ再確保)
+#   prints(s)      str でも String でも出力できる (借用)
+#   len(s) / s[i]  バイト長 / バイト (str と共通)
+# String はバッファを所有し、スコープを抜けると自動で解放される (Drop/RAII)。
+# 一方リテラル "..." は str (静的・借用) なので、組み立てには String を使う。
+
+# str から String を作り、push_str で組み立てる。
+{
+  let mut s: String = string("Hello");
+  push_str(s, ", ");
+  push_str(s, "world");
+  push_str(s, "!\n");
+  prints(s);              # => Hello, world!
+  printi(len(s));         # => 14
+  printi(s[0] as i64);    # => 72  ('H')
+};
+
+# ループで伸ばす (容量は必要に応じ倍々に再確保される)。
+{
+  let mut buf: String = string("");
+  for i = 0, i < 5, 1 in push_str(buf, "ab");
+  prints(buf); prints("\n");   # => ababababab
+  printi(len(buf));            # => 10
+};
+
+# String を値で受け取る関数はそれを所有する (呼び出し後は drop される)。
+fn announce(msg: String) -> () = {
+  prints("[");
+  prints(msg);
+  prints("]\n");
+};
+{
+  let mut m: String = string("ready");
+  announce(m);             # m をムーブ → announce が drop する
+};
+
+# String は struct のフィールドや Vec の要素にもできる (まとめて drop される)。
+{
+  let mut names: Vec<String> = vec();
+  push(names, string("Ada"));
+  push(names, string("Grace"));
+  prints(names[0]); prints(" & "); prints(names[1]); prints("\n");
+  printi(len(names));     # => 2
+};

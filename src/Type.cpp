@@ -50,6 +50,8 @@ std::string Type::str() const {
     return "Vec<" + elems[0].str() + ">";
   case Kind::Str:
     return "str";
+  case Kind::String:
+    return "String";
   }
   return "<?>";
 }
@@ -101,6 +103,10 @@ bool kal::typeFromName(llvm::StringRef name, Type &out) {
   }
   if (name == "str") {
     out = Type::strTy();
+    return true;
+  }
+  if (name == "String") {
+    out = Type::stringTy();
     return true;
   }
   return false;

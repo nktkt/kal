@@ -75,7 +75,7 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 **generic** (`Name<T, …>`, with `Option<T>` / `Result<T, E>` built in) —
 **tuples** `(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`,
 **references** `&T` / `&mut T`, the heap-allocated **`Box<T>`**, the growable
-**`Vec<T>`**, and string slices **`str`**.
+**`Vec<T>`**, string slices **`str`**, and the owned **`String`**.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 Boolean literals are `true` and `false`.
@@ -439,17 +439,36 @@ s[0];                       # => 'w' as u8 (bounds-checked byte access)
 ```
 
 `str` works as a variable, parameter, return type, field, payload, etc.
-Equality (`==`), concatenation, and an owned/growable `String` are not built yet.
+
+For a string you can build at runtime, use the owned, growable **`String`** (a
+heap `{ptr, len, cap}` ≈ `Vec<u8>`). `string(s)` copies a `str` onto the heap,
+`push_str(s, t)` appends a `str` (reallocating as needed), and a `String` is
+dropped (its buffer freed) when it goes out of scope. `prints`, `len`, and `s[i]`
+accept both `str` and `String`.
+
+```
+let mut s: String = string("Hello");
+push_str(s, ", world");
+prints(s);                  # Hello, world
+len(s);                     # => 12
+```
+
+`push_str` needs a mutable `String`; `str` is read-only (no `s[i] = …`). Equality
+(`==`), `+` concatenation, and `String`→`str` coercion are future work; for now
+pass a `String` where a `str` is expected only to `prints`/`len`/indexing (which
+accept both).
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
 - `putchard(x: i64)` — write the character with code `x` (`putchard(10)` is a newline)
-- `prints(s: str)` — write a string's bytes (no trailing newline)
-- `len(s: &[T] | Vec<T> | str) -> i64` — the length of a slice, `Vec`, or `str` (bytes)
+- `prints(s: str | String)` — write a string's bytes (no trailing newline)
+- `len(s: &[T] | Vec<T> | str | String) -> i64` — length (slices/`Vec`/strings; bytes)
 - `box(x: T) -> Box<T>` — move `x` onto the heap
 - `vec() -> Vec<T>` — a new empty growable array (element type from context)
 - `push(v: Vec<T>, x: T)` — append `x` to a mutable `Vec` (grows as needed)
+- `string(s: str) -> String` — copy a `str` into an owned heap `String`
+- `push_str(s: String, t: str)` — append a `str` to a mutable `String`
 
 ### Comments
 `#` to end of line.

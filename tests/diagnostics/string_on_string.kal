@@ -1,0 +1,3 @@
+# string() builds a String from a str, not from another String (no clone yet);
+# allowing String would leak the original's buffer.
+{ let s: String = string("hi"); let t: String = string(s); prints(t); };

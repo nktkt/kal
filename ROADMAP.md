@@ -149,9 +149,10 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   ✅ `Vec<T>` (growable array) landed — `vec()`/`push`/`len`/`v[i]`, capacity
   doubling via `realloc`, element-aware Drop.
   ✅ String literals + `str` landed — a `Copy` `{ptr,len}` view of static UTF-8
-  (`prints`/`len`/`s[i]`). Next: an owned/growable `String` (`Vec<u8>`-backed,
-  concatenation), then `HashMap`. (Remaining: `Vec::pop`/iteration, dropping
-  discarded temporaries.)
+  (`prints`/`len`/`s[i]`).
+  ✅ Owned `String` landed — heap `{ptr,len,cap}` (`string`/`push_str`), Drop-freed.
+  Next: string `==` / `+` concatenation / `String`→`str` coercion, then `HashMap`.
+  (Remaining: `Vec::pop`/iteration, dropping discarded owned temporaries.)
 - `Option<T>` / `Result<T,E>` and the `?` operator — ✅ done (prelude types +
   early `return` and `?`). (Heap-backed collections still pending.)
 - Iterators and closures.

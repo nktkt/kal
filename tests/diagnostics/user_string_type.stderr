@@ -1,0 +1,6 @@
+error[E0258]: String は組み込み型です
+ --> tests/diagnostics/user_string_type.kal:2:8
+  |
+2 | struct String { x: i64 }
+  |        ^^^^^^
+1 個のエラーで中断しました
