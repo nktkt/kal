@@ -80,6 +80,8 @@ Token Lexer::next() {
       k = Tok::False;
     else if (s == "impl")
       k = Tok::Impl;
+    else if (s == "trait")
+      k = Tok::Trait;
     else if (s == "self")
       k = Tok::SelfKw;
     t.text = s.str();

@@ -1,0 +1,6 @@
+error[E0230]: 型 i32 はトレイト Area を実装していません
+ --> tests/diagnostics/trait_bound_unsatisfied.kal:6:8
+  |
+6 | printi(describe(5));
+  |        ^^^^^^^^^^^
+1 個のエラーで中断しました

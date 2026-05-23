@@ -7,6 +7,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kal {
@@ -87,7 +88,11 @@ private:
   std::map<std::string, VariantInfo> variants_;
   // 型名 → メソッド名 → メソッド定義 (proto.args[0]="self")
   std::map<std::string, std::map<std::string, const FunctionDef *>> methods_;
+  std::map<std::string, const TraitDef *> traits_; // トレイト名 → 定義
+  std::set<std::pair<std::string, std::string>> traitImpls_; // (トレイト, 型)
   std::set<std::string> activeTypeParams_; // 検査中の関数の型引数 (resolve 用)
+  // 検査中の関数の型引数の境界: 型引数名 → トレイト名の集合
+  std::map<std::string, std::vector<std::string>> paramBounds_;
 };
 
 } // namespace kal

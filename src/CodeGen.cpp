@@ -646,7 +646,14 @@ Value *CodeGen::genCall(const CallExpr *e) {
 }
 
 Value *CodeGen::genMethodCall(const MethodCallExpr *e) {
-  const FunctionDef *def = methodDefs_[e->ownerType][e->method];
+  // レシーバの実型 (単態化後) からオーナー型と型引数を導出する。
+  // これによりトレイト境界経由の呼び出し (Param → 実型) も正しく解決される。
+  kal::Type recvT = typeSubst_.empty() ? e->receiver->type
+                                       : substType(e->receiver->type, typeSubst_);
+  kal::Type baseT = recvT.isRef() ? recvT.pointee() : recvT;
+  const FunctionDef *def = methodDefs_[baseT.name].at(e->method);
+  std::vector<kal::Type> targs = baseT.elems; // 具体化済みの型引数
+
   // self 引数を構築: 値レシーバはムーブ、&self/&mut self はポインタを渡す。
   Value *selfArg;
   if (e->selfKind == 0)
@@ -659,10 +666,6 @@ Value *CodeGen::genMethodCall(const MethodCallExpr *e) {
   args.push_back(selfArg);
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
-  // 型引数を (単態化中なら) 具体化してインスタンスを取得
-  std::vector<kal::Type> targs;
-  for (auto &ta : e->typeArgs)
-    targs.push_back(typeSubst_.empty() ? ta : substType(ta, typeSubst_));
   Function *callee = ensureInstance(def, targs);
   CallInst *call = builder_.CreateCall(callee, args);
   kal::Type rt = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);

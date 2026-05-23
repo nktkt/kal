@@ -135,9 +135,11 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   more than move values around.
 - **Methods** — ✅ **inherent `impl` blocks done** (`impl Type { fn m(self/&self/
   &mut self, …) }`, `recv.method(…)`, auto-borrow + field auto-deref; generic
-  impls monomorphize). Trait methods build on this.
-- **Traits** (interfaces / typeclasses) with bounds; associated types.
-- Static dispatch by default; trait objects (dynamic dispatch) where needed.
+  impls monomorphize).
+- **Traits** — ✅ **core done** (`trait` + `impl Trait for Type` with conformance
+  checking; bounded generics `fn f<T: Trait>` with static dispatch via
+  monomorphization). Remaining: associated types, default methods, `Self` types,
+  trait impls on generic types, and trait objects (dynamic dispatch).
 - *Exit:* write reusable generic data structures (`Vec<T>`, `Map<K,V>`).
 
 #### Phase 5 — Standard library & error handling · **L** · → v0.7

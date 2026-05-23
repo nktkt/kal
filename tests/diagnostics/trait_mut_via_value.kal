@@ -1,0 +1,6 @@
+# A &mut self trait method needs a mutable receiver — a by-value bound param
+# (immutable) can't satisfy it; pass &mut T instead.
+trait Bump { fn bump(&mut self) -> i64; }
+struct C { n: i64 }
+impl Bump for C { fn bump(&mut self) -> i64 = { self.n = self.n + 1; self.n } }
+fn doit<T: Bump>(t: T) -> i64 = t.bump();

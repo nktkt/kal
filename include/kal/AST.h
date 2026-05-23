@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kal {
@@ -272,6 +273,8 @@ struct Prototype {
   std::string name;
   Span nameSpan;
   std::vector<std::string> typeParams; // ジェネリックな型引数名 (空なら非総称)
+  // 型引数の境界: (型引数名, トレイト名)。例 <T: Area> → {"T","Area"}
+  std::vector<std::pair<std::string, std::string>> bounds;
   std::vector<std::string> args;
   std::vector<Type> paramTypes;
   Type retType;
@@ -319,10 +322,22 @@ struct EnumDef {
   Span span;
 };
 
-/// impl ブロック: `impl Name<P, ...> { fn m(self, ...) ... }`
+/// トレイト宣言: `trait Name { fn m(&self, ...) -> T; ... }` (シグネチャのみ)。
+/// 各メソッドは Prototype (args[0]="self"、paramTypes[0]=self の種類を表す型)。
+struct TraitDef {
+  std::string name;
+  Span nameSpan;
+  std::vector<std::unique_ptr<Prototype>> methods;
+  Span span;
+};
+
+/// impl ブロック: `impl Name<P, ...> { ... }` (固有メソッド) または
+/// `impl Trait for Name { ... }` (トレイト実装。traitName が非空)。
 /// 各メソッドは FunctionDef (proto.name = "Name#method"、args[0]="self"、
 /// proto.typeParams = impl の型引数)。
 struct ImplBlock {
+  std::string traitName; // 空でなければトレイト実装
+  Span traitSpan;
   std::string typeName;
   Span typeSpan;
   std::vector<std::string> typeParams;
@@ -336,6 +351,7 @@ struct Program {
   std::vector<std::unique_ptr<EnumDef>> enums;
   std::vector<std::unique_ptr<Prototype>> externs;
   std::vector<std::unique_ptr<FunctionDef>> functions;
+  std::vector<std::unique_ptr<TraitDef>> traits;
   std::vector<std::unique_ptr<ImplBlock>> impls;
   std::vector<ExprPtr> topExprs;
 };

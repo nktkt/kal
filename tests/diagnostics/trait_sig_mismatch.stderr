@@ -1,0 +1,6 @@
+error[E0227]: メソッド 'area' のシグネチャがトレイト Area と一致しません
+ --> tests/diagnostics/trait_sig_mismatch.kal:4:23
+  |
+4 | impl Area for Sq { fn area(&self) -> f64 = 1.0; }
+  |                       ^^^^
+1 個のエラーで中断しました

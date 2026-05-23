@@ -282,6 +282,28 @@ Point { x: 3, y: 4 }.norm2();        # => 25
 impl Pair<A, B> { fn fst(&self) -> A = self.first; }   # ジェネリック型のメソッド
 ```
 
+### トレイト
+
+`trait` はインターフェース（メソッドのシグネチャ）を宣言し、`impl Trait for Type`
+で実装します（適合性が検査されます）。ジェネリック関数はトレイトで**境界**をつけられ
+（`fn f<T: Trait>(…)`）、本体で `T` の値に対しトレイトのメソッドを呼べます。呼び出しは
+**静的ディスパッチ**（具体化ごとに具体 `impl` へ単態化）です。
+
+```
+trait Area { fn area(&self) -> i64; }
+
+struct Square { side: i64 }
+impl Area for Square { fn area(&self) -> i64 = self.side * self.side; }
+
+Square { side: 5 }.area();                       # => 25   (直接呼べる)
+
+fn describe<T: Area>(s: T) -> i64 = s.area() * 2;   # 境界つきジェネリック
+describe(Square { side: 6 });                    # => 72
+```
+
+境界を満たさない型を渡すとエラーです。Self 型・デフォルトメソッド本体・ジェネリック型への
+トレイト実装は今後の課題です（[ROADMAP.md](ROADMAP.md)）。
+
 ### 参照
 
 ```
@@ -340,7 +362,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

@@ -1,0 +1,4 @@
+# A trait impl method must match the trait's signature.
+trait Area { fn area(&self) -> i64; }
+struct Sq { s: i64 }
+impl Area for Sq { fn area(&self) -> f64 = 1.0; }

@@ -1,0 +1,6 @@
+# Calling a bounded generic with a type that doesn't implement the trait.
+trait Area { fn area(&self) -> i64; }
+struct Sq { s: i64 }
+impl Area for Sq { fn area(&self) -> i64 = self.s * self.s; }
+fn describe<T: Area>(x: T) -> i64 = x.area();
+printi(describe(5));

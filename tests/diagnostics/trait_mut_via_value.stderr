@@ -1,0 +1,6 @@
+error[E0213]: &mut self メソッドには可変な場所が必要です (let mut が必要)
+ --> tests/diagnostics/trait_mut_via_value.kal:6:33
+  |
+6 | fn doit<T: Bump>(t: T) -> i64 = t.bump();
+  |                                 ^
+1 個のエラーで中断しました

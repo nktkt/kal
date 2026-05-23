@@ -5,6 +5,13 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Traits:** `trait Name { fn m(&self, …) -> …; }` declares an interface;
+  `impl Trait for Type { … }` implements it (checked for conformance). Generic
+  functions can be **bounded** — `fn f<T: Trait>(x: T) …` lets the body call
+  trait methods on `x`, dispatched statically (monomorphized to the concrete
+  `impl` at each call). Trait methods are also callable directly on a concrete
+  type. (Self types, default methods, and trait impls on generic types are
+  future work.)
 - **Methods (`impl` blocks):** `impl Type { fn m(self, …) … }` defines methods,
   called as `recv.method(args)`. Receivers are `self` (by value, moves), `&self`
   (shared borrow), or `&mut self` (mutable borrow), with automatic borrowing of

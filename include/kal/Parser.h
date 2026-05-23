@@ -41,6 +41,7 @@ private:
   std::unique_ptr<Prototype> parseExtern();
   std::unique_ptr<StructDef> parseStructDef();
   std::unique_ptr<EnumDef> parseEnumDef();
+  std::unique_ptr<TraitDef> parseTraitDef();
   std::unique_ptr<ImplBlock> parseImplBlock();
 
   Lexer &lexer_;

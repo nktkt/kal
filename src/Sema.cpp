@@ -119,6 +119,19 @@ bool Sema::run(Program &program) {
     enums_[ed->name] = ed.get();
   }
 
+  // トレイトを登録
+  for (auto &td : program.traits) {
+    if (traits_.count(td->name) || structs_.count(td->name) ||
+        enums_.count(td->name))
+      diag_.error(td->nameSpan, "E0220", "トレイト名が重複しています: " + td->name);
+    traits_[td->name] = td.get();
+    std::set<std::string> seenM; // メソッド名の重複を弾く
+    for (auto &m : td->methods)
+      if (!seenM.insert(m->name).second)
+        diag_.error(m->nameSpan, "E0206",
+                    "トレイトメソッドが重複しています: " + m->name);
+  }
+
   // 型引数名の検査 (組み込み型名との衝突 / 同一リスト内の重複)
   auto checkTypeParams = [&](const std::vector<std::string> &tps, Span span) {
     std::set<std::string> seen;
@@ -174,6 +187,13 @@ bool Sema::run(Program &program) {
       m->proto->retType = resolve(bindParams(m->proto->retType, params));
     }
   }
+  // トレイトメソッドの非 self 引数・戻り値を解決する (self はプレースホルダなので除く)
+  for (auto &td : program.traits)
+    for (auto &m : td->methods) {
+      for (size_t i = 1; i < m->paramTypes.size(); ++i)
+        m->paramTypes[i] = resolve(m->paramTypes[i]);
+      m->retType = resolve(m->retType);
+    }
 
   // (3) 型存在チェック (Ref/Tuple は再帰的に)
   std::function<bool(const Type &)> knownType = [&](const Type &t) -> bool {
@@ -257,6 +277,74 @@ bool Sema::run(Program &program) {
       if (!knownType(m->proto->retType))
         diag_.error(m->proto->span, "E0046",
                     "未定義または不正な型です: " + m->proto->retType.str());
+    }
+  }
+  // トレイトメソッドの型 (非 self) を検査
+  for (auto &td : program.traits)
+    for (auto &m : td->methods) {
+      for (size_t i = 1; i < m->paramTypes.size(); ++i)
+        if (!knownType(m->paramTypes[i]))
+          diag_.error(m->span, "E0046",
+                      "未定義または不正な型です: " + m->paramTypes[i].str());
+      if (!knownType(m->retType))
+        diag_.error(m->span, "E0046",
+                    "未定義または不正な型です: " + m->retType.str());
+    }
+  // 型引数の境界が存在するトレイトを指すか
+  for (auto &f : program.functions)
+    for (auto &b : f->proto->bounds)
+      if (!traits_.count(b.second))
+        diag_.error(f->proto->nameSpan, "E0229",
+                    "未定義のトレイトです: " + b.second);
+  // トレイト実装の適合性チェック
+  for (auto &ib : program.impls) {
+    if (ib->traitName.empty())
+      continue;
+    auto trIt = traits_.find(ib->traitName);
+    if (trIt == traits_.end()) {
+      diag_.error(ib->traitSpan, "E0225",
+                  "未定義のトレイトです: " + ib->traitName);
+      continue;
+    }
+    const TraitDef *td = trIt->second;
+    traitImpls_.insert({ib->traitName, ib->typeName}); // 実装関係を記録
+    auto sk = [](const Type &s) { return !s.isRef() ? 0 : (s.refMut ? 2 : 1); };
+    auto bare = [&](const FunctionDef *m) {
+      return m->proto->name.substr(ib->typeName.size() + 1);
+    };
+    for (auto &tm : td->methods) { // 各トレイトメソッドの実装と一致を確認
+      const FunctionDef *im = nullptr;
+      for (auto &m : ib->methods)
+        if (bare(m.get()) == tm->name) {
+          im = m.get();
+          break;
+        }
+      if (!im) {
+        diag_.error(ib->traitSpan, "E0226",
+                    "トレイト " + ib->traitName + " のメソッド '" + tm->name +
+                        "' が未実装です");
+        continue;
+      }
+      bool ok = im->proto->paramTypes.size() == tm->paramTypes.size() &&
+                sk(im->proto->paramTypes[0]) == sk(tm->paramTypes[0]) &&
+                im->proto->retType == tm->retType;
+      for (size_t i = 1; ok && i < tm->paramTypes.size(); ++i)
+        ok = im->proto->paramTypes[i] == tm->paramTypes[i];
+      if (!ok)
+        diag_.error(im->proto->nameSpan, "E0227",
+                    "メソッド '" + tm->name + "' のシグネチャがトレイト " +
+                        ib->traitName + " と一致しません");
+    }
+    for (auto &m : ib->methods) { // トレイトにないメソッドを実装していないか
+      std::string bn = bare(m.get());
+      bool inTrait = false;
+      for (auto &tm : td->methods)
+        if (tm->name == bn)
+          inTrait = true;
+      if (!inTrait)
+        diag_.error(m->proto->nameSpan, "E0228",
+                    "トレイト " + ib->traitName + " にメソッド '" + bn +
+                        "' はありません");
     }
   }
 
@@ -360,6 +448,9 @@ void Sema::checkFunction(FunctionDef &f) {
   locals_.clear();
   // ジェネリック関数なら型引数をスコープに入れる (本体の型注釈で Param 化)
   activeTypeParams_ = {f.proto->typeParams.begin(), f.proto->typeParams.end()};
+  paramBounds_.clear();
+  for (auto &b : f.proto->bounds)
+    paramBounds_[b.first].push_back(b.second); // 型引数の境界トレイト
   for (size_t i = 0; i < f.proto->args.size(); ++i)
     locals_[f.proto->args[i]] = {f.proto->paramTypes[i], /*isMut=*/false};
 
@@ -370,6 +461,7 @@ void Sema::checkFunction(FunctionDef &f) {
                     ", 実際 " + bodyT.str() + ")");
   }
   activeTypeParams_.clear();
+  paramBounds_.clear();
 }
 
 Type Sema::check(Expr *e, std::optional<Type> expected) {
@@ -615,6 +707,25 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
         return Type::unknown();
       }
       targs.push_back(sit->second);
+    }
+    // トレイト境界を満たすか確認 (解決した型引数がトレイトを実装しているか)
+    for (auto &b : proto->bounds) {
+      Type st = substType(Type::paramTy(b.first), subst);
+      bool ok;
+      if (st.isParam()) { // 検査中の型引数なら、その境界に含まれていれば満たす
+        ok = false;
+        auto pb = paramBounds_.find(st.name);
+        if (pb != paramBounds_.end())
+          for (auto &t : pb->second)
+            if (t == b.second)
+              ok = true;
+      } else {
+        ok = traitImpls_.count({b.second, st.name}) > 0;
+      }
+      if (!ok)
+        diag_.error(e->span, "E0230",
+                    "型 " + st.str() + " はトレイト " + b.second +
+                        " を実装していません");
     }
     // 解決後の引数型で再検証
     for (size_t i = 0; i < e->args.size(); ++i) {
@@ -1077,6 +1188,70 @@ Type Sema::checkMethodCall(MethodCallExpr *e) {
   // レシーバが参照なら自動で deref して、その指す型のメソッドを探す
   e->recvIsRef = rt.isRef();
   Type baseT = rt.isRef() ? rt.pointee() : rt;
+
+  // 型引数レシーバ: 境界トレイトのメソッドとして解決する (単態化で実型に解決)
+  if (baseT.isParam()) {
+    const Prototype *tm = nullptr;
+    auto bit = paramBounds_.find(baseT.name);
+    if (bit != paramBounds_.end())
+      for (auto &tn : bit->second) {
+        auto trIt = traits_.find(tn);
+        if (trIt == traits_.end())
+          continue;
+        for (auto &m : trIt->second->methods)
+          if (m->name == e->method) {
+            tm = m.get();
+            break;
+          }
+        if (tm)
+          break;
+      }
+    if (!tm) {
+      diag_.error(e->methodSpan, "E0211",
+                  "型引数 " + baseT.name + " の境界にメソッド '" + e->method +
+                      "' はありません");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unknown();
+    }
+    e->ownerType = baseT.name; // CodeGen は単態化後の実型から再導出する
+    e->selfKind = !tm->paramTypes[0].isRef()
+                      ? 0
+                      : (tm->paramTypes[0].refMut ? 2 : 1);
+    // レシーバの適合性 (具体型分岐と同じ規則を境界経由でも適用する)
+    if (e->selfKind == 0 && rt.isRef())
+      diag_.error(e->receiver->span, "E0212",
+                  "値レシーバのメソッドには値が必要です (参照が渡されています)");
+    if (e->selfKind == 2) { // &mut self
+      if (rt.isRef()) {
+        if (!rt.refMut)
+          diag_.error(e->receiver->span, "E0213",
+                      "&mut self メソッドには可変な参照/場所が必要です");
+      } else if (!isMutablePlace(e->receiver.get())) {
+        diag_.error(e->receiver->span, "E0213",
+                    "&mut self メソッドには可変な場所が必要です (let mut が必要)");
+      }
+    }
+    size_t want = tm->paramTypes.size() - 1;
+    if (want != e->args.size()) {
+      diag_.error(e->span, "E0103",
+                  "引数の数が一致しません (期待 " + std::to_string(want) +
+                      ", 実際 " + std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return tm->retType;
+    }
+    for (size_t i = 0; i < e->args.size(); ++i) {
+      Type pt = tm->paramTypes[i + 1];
+      Type at = check(e->args[i].get(), pt);
+      if (at.isKnown() && at != pt)
+        diag_.error(e->args[i]->span, "E0104",
+                    "引数の型が一致しません (期待 " + pt.str() + ", 実際 " +
+                        at.str() + ")");
+    }
+    return tm->retType;
+  }
+
   if (!baseT.isStruct() && !baseT.isEnum()) {
     if (baseT.isKnown())
       diag_.error(e->receiver->span, "E0210",

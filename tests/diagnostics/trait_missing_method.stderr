@@ -1,0 +1,6 @@
+error[E0226]: トレイト Shape のメソッド 'name' が未実装です
+ --> tests/diagnostics/trait_missing_method.kal:4:6
+  |
+4 | impl Shape for Sq { fn area(&self) -> i64 = self.s * self.s; }
+  |      ^^^^^
+1 個のエラーで中断しました

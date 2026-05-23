@@ -298,6 +298,30 @@ Point { x: 3, y: 4 }.norm2();        # => 25
 impl Pair<A, B> { fn fst(&self) -> A = self.first; }   # methods on a generic type
 ```
 
+### Traits
+
+A `trait` declares an interface (method signatures); `impl Trait for Type`
+implements it (checked for conformance). A generic function can be **bounded** by
+a trait — `fn f<T: Trait>(…)` — which lets its body call the trait's methods on a
+value of `T`. Calls are dispatched **statically** (each instantiation
+monomorphizes to the concrete `impl`).
+
+```
+trait Area { fn area(&self) -> i64; }
+
+struct Square { side: i64 }
+impl Area for Square { fn area(&self) -> i64 = self.side * self.side; }
+
+Square { side: 5 }.area();                       # => 25   (called directly)
+
+fn describe<T: Area>(s: T) -> i64 = s.area() * 2;   # bounded generic
+describe(Square { side: 6 });                    # => 72
+```
+
+Passing a type that doesn't implement the bound is an error. Self types, default
+method bodies, and trait impls on generic types are future work
+(see [ROADMAP.md](ROADMAP.md)).
+
 ### References
 
 ```
@@ -358,7 +382,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

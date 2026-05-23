@@ -25,6 +25,7 @@ enum class Tok {
   True,
   False,
   Impl,
+  Trait,
   SelfKw, // self
   // 主要トークン
   Identifier,
