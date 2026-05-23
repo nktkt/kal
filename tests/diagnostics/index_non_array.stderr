@@ -1,4 +1,4 @@
-error[E0193]: 配列・スライスではないものに添字アクセスしています (実際 i64)
+error[E0193]: 配列・スライス・Vec ではないものに添字アクセスしています (実際 i64)
  --> tests/diagnostics/index_non_array.kal:2:23
   |
 2 | fn f(n: i64) -> i64 = n[0];

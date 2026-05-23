@@ -267,6 +267,10 @@ struct CallExpr : Expr {
   bool isLenBuiltin = false;
   // Sema が、これが組み込み box(e) なら設定する (ヒープ確保して Box<T> を返す)
   bool isBoxBuiltin = false;
+  // Sema が、これが組み込み vec() なら設定する (空の Vec<T> を返す)
+  bool isVecBuiltin = false;
+  // Sema が、これが組み込み push(v, x) なら設定する (v に x を追加・v は可変借用)
+  bool isPushBuiltin = false;
   // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
   std::vector<Type> typeArgs;
   CallExpr(Span s, std::string callee, Span calleeSpan,

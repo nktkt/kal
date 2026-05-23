@@ -1,0 +1,6 @@
+error[E0050]: Vec は組み込み型です
+ --> tests/diagnostics/user_vec_type.kal:2:8
+  |
+2 | struct Vec { x: i64 }
+  |        ^^^
+1 個のエラーで中断しました

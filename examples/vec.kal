@@ -1,0 +1,47 @@
+# Vec<T>: ヒープ上の可変長配列 (動的配列)。
+#   vec()        空の Vec<T> を作る (要素型 T は型注釈から推論)
+#   push(v, x)   末尾に x を追加する (容量が足りなければ自動で再確保)
+#   len(v)       要素数
+#   v[i]         添字アクセス (読み書き・実行時境界チェックつき)
+# Vec はヒープを所有し、スコープを抜けると要素ごと自動解放される (Drop/RAII)。
+
+# 基本: push して読み書きする。
+{
+  let mut v: Vec<i64> = vec();
+  push(v, 10);
+  push(v, 20);
+  push(v, 30);
+  printi(len(v));   # => 3
+  printi(v[0]);     # => 10
+  printi(v[2]);     # => 30
+  v[1] = 99;        # 添字代入
+  printi(v[1]);     # => 99
+};
+
+# 容量の自動成長: 0→4→8→… と倍々に再確保される。
+{
+  let mut squares: Vec<i64> = vec();
+  for i = 0, i < 100, 1 in push(squares, (i * i) as i64);
+  printi(len(squares));   # => 100
+  printi(squares[99]);    # => 9801
+};
+
+# 合計を求める関数 (Vec を値で受け取る = ムーブ、関数側が drop する)。
+fn sum(v: Vec<i64>) -> i64 = {
+  let mut s: i64 = 0;
+  for i = 0 as i64, i < len(v), 1 in s = s + v[i];
+  s
+};
+{
+  let mut xs: Vec<i64> = vec();
+  push(xs, 1); push(xs, 2); push(xs, 3); push(xs, 4);
+  printi(sum(xs));        # => 10
+};
+
+# 非 Copy の要素 (Box) も持てる。drop は各要素を解放してからバッファを解放する。
+{
+  let mut boxes: Vec<Box<i64>> = vec();
+  push(boxes, box(100));
+  push(boxes, box(200));
+  printi(len(boxes));     # => 2
+};

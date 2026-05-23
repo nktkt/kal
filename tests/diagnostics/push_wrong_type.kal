@@ -1,0 +1,2 @@
+# The pushed value must match the Vec's element type.
+{ let mut v: Vec<i64> = vec(); push(v, true); };

@@ -23,6 +23,9 @@ Type Sema::resolve(Type t) const {
   // 組み込み Box<T>
   if (t.kind == Type::Kind::Struct && t.name == "Box" && t.elems.size() == 1)
     return Type::boxTy(resolve(t.elems[0]));
+  // 組み込み Vec<T>
+  if (t.kind == Type::Kind::Struct && t.name == "Vec" && t.elems.size() == 1)
+    return Type::vecTy(resolve(t.elems[0]));
   // 検査中のジェネリック関数の型引数名は Param へ (本体の let/as 注釈用)
   if (t.kind == Type::Kind::Struct && activeTypeParams_.count(t.name))
     return Type::paramTy(t.name);
@@ -165,6 +168,8 @@ bool Sema::run(Program &program) {
   for (auto &sd : program.structs) {
     if (sd->name == "Box")
       diag_.error(sd->nameSpan, "E0049", "Box は組み込み型です");
+    if (sd->name == "Vec")
+      diag_.error(sd->nameSpan, "E0050", "Vec は組み込み型です");
     if (structs_.count(sd->name))
       diag_.error(sd->nameSpan, "E0045", "構造体が重複定義されています");
     structs_[sd->name] = sd.get();
@@ -172,6 +177,8 @@ bool Sema::run(Program &program) {
   for (auto &ed : program.enums) {
     if (ed->name == "Box")
       diag_.error(ed->nameSpan, "E0049", "Box は組み込み型です");
+    if (ed->name == "Vec")
+      diag_.error(ed->nameSpan, "E0050", "Vec は組み込み型です");
     if (enums_.count(ed->name) || structs_.count(ed->name))
       diag_.error(ed->nameSpan, "E0085", "型名が重複しています");
     enums_[ed->name] = ed.get();
@@ -733,11 +740,63 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
       return Type::intTy(64, true);
     }
     Type at = check(e->args[0].get(), std::nullopt);
-    if (at.isKnown() && !at.isSlice())
+    if (at.isKnown() && !at.isSlice() && !at.isVec())
       diag_.error(e->args[0]->span, "E0109",
-                  "len の引数はスライスである必要があります (実際 " + at.str() +
-                      ")");
+                  "len の引数はスライスか Vec である必要があります (実際 " +
+                      at.str() + ")");
     return Type::intTy(64, true);
+  }
+
+  // 組み込み vec() -> Vec<T> (空。要素型 T は期待型から推論)
+  if (e->callee == "vec" && !funcs_.count("vec")) {
+    e->isVecBuiltin = true;
+    if (!e->args.empty()) {
+      diag_.error(e->span, "E0250",
+                  "vec は引数を取りません (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+    }
+    if (!(expected && expected->isVec())) {
+      diag_.error(e->span, "E0251",
+                  "vec の要素型を推論できません (`let v: Vec<T> = vec();` の"
+                  "ように型注釈を付けてください)");
+      return Type::unknown();
+    }
+    return Type::vecTy(expected->elemType());
+  }
+
+  // 組み込み push(v, x): 可変な Vec<T> v に x を追加する (v は可変借用)
+  if (e->callee == "push" && !funcs_.count("push")) {
+    e->isPushBuiltin = true;
+    if (e->args.size() != 2) {
+      diag_.error(e->span, "E0252",
+                  "push には引数が 2 つ必要です (push(v, x)。実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unit();
+    }
+    Type vt = check(e->args[0].get(), std::nullopt);
+    if (vt.isKnown() && !vt.isVec()) {
+      diag_.error(e->args[0]->span, "E0253",
+                  "push の第 1 引数は Vec である必要があります (実際 " +
+                      vt.str() + ")");
+      check(e->args[1].get(), std::nullopt);
+      return Type::unit();
+    }
+    if (vt.isVec() && !isMutablePlace(e->args[0].get()))
+      diag_.error(e->args[0]->span, "E0254",
+                  "push の第 1 引数は可変な場所である必要があります "
+                  "(`let mut v` で宣言してください)");
+    std::optional<Type> hint = vt.isVec() ? std::optional<Type>(vt.elemType())
+                                          : std::nullopt;
+    Type xt = check(e->args[1].get(), hint);
+    if (vt.isVec() && xt.isKnown() && xt != vt.elemType())
+      diag_.error(e->args[1]->span, "E0255",
+                  "push する値の型が要素型と一致しません (期待 " +
+                      vt.elemType().str() + ", 実際 " + xt.str() + ")");
+    return Type::unit();
   }
 
   // 組み込み box(e) -> Box<T> (ユーザーが box を定義していなければ)
@@ -1274,10 +1333,11 @@ Type Sema::checkIndex(IndexExpr *e) {
   if (it.isKnown() && !it.isInt())
     diag_.error(e->index->span, "E0192",
                 "添字には整数型が必要です (実際 " + it.str() + ")");
-  if (!bt.isArray() && !bt.isSlice()) {
+  if (!bt.isArray() && !bt.isSlice() && !bt.isVec()) {
     if (bt.isKnown())
       diag_.error(e->base->span, "E0193",
-                  "配列・スライスではないものに添字アクセスしています (実際 " +
+                  "配列・スライス・Vec ではないものに添字アクセスしています "
+                  "(実際 " +
                       bt.str() + ")");
     return Type::unknown();
   }

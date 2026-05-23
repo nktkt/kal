@@ -145,8 +145,10 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 #### Phase 5 — Standard library & error handling · **L** · → v0.7
 - Heap primitives: allocator interface, `Box<T>`, `Vec<T>`, `String`, `HashMap`.
   ✅ `Box<T>` (via `box(e)`) and **Drop/RAII** landed — boxes are freed
-  automatically (drop flags for moves; recurses into aggregates). `Vec`/`String`/
-  growable collections build on this next.
+  automatically (drop flags for moves; recurses into aggregates).
+  ✅ `Vec<T>` (growable array) landed — `vec()`/`push`/`len`/`v[i]`, capacity
+  doubling via `realloc`, element-aware Drop. `String`/`HashMap` build on this
+  next. (Remaining: `pop`/iteration, dropping discarded temporaries.)
 - `Option<T>` / `Result<T,E>` and the `?` operator — ✅ done (prelude types +
   early `return` and `?`). (Heap-backed collections still pending.)
 - Iterators and closures.

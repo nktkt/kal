@@ -50,6 +50,10 @@ private:
   llvm::Value *genMethodCall(const MethodCallExpr *e);
   llvm::Value *genReturn(const ReturnExpr *e);
   llvm::Value *genTry(const TryExpr *e);
+  // Vec<T> = { T* ptr, i64 len, i64 cap }。LLVM 表現は要素型に依らず一定 (不透明 ptr)。
+  llvm::StructType *vecLLVMTy();
+  llvm::Value *genVecNew(const CallExpr *e); // 組み込み vec(): 空の Vec を作る
+  llvm::Value *genPush(const CallExpr *e);   // 組み込み push(v, x): 末尾に追加
   // 現在のブロックが終端命令を持つ (return 等で発散した) か。
   bool blockDone();
   llvm::Value *genMatch(const MatchExpr *e);

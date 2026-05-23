@@ -116,6 +116,11 @@ void MoveCheck::use(const Expr *e) {
         requireLive(a.get()); // len は借用: 引数をムーブしない
       return;
     }
+    if (c->isPushBuiltin && c->args.size() == 2) {
+      requireLive(c->args[0].get()); // push(v, x): v は可変借用 (ムーブしない)
+      use(c->args[1].get());         // x は v にムーブで入る
+      return;
+    }
     for (auto &a : c->args)
       use(a.get());
     return;
@@ -147,11 +152,13 @@ void MoveCheck::use(const Expr *e) {
   case Expr::Kind::Index: {
     auto *ix = static_cast<const IndexExpr *>(e);
     use(ix->index.get()); // 添字値は評価される
-    if (ix->base->type.isSlice()) {
-      // スライスは借用なので中身をムーブできない (deref と同様)
+    if (ix->base->type.isSlice() || ix->base->type.isVec()) {
+      // スライス/Vec の要素はコンテナが所有するため、添字で値を取り出すと
+      // ムーブアウトになる。非 Copy 要素は取り出せない (借用するか Copy のみ)。
       requireLive(ix->base.get());
       if (!isCopy(e->type))
-        diag_.error(e->span, "E0184", "スライスからムーブすることはできません");
+        diag_.error(e->span, "E0184",
+                    "スライス・Vec の非 Copy 要素はムーブで取り出せません");
     } else if (isCopy(e->type)) {
       requireLive(ix->base.get()); // Copy 要素の読みはムーブしない
     } else {

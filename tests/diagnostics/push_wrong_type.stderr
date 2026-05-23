@@ -1,0 +1,6 @@
+error[E0255]: push する値の型が要素型と一致しません (期待 i64, 実際 bool)
+ --> tests/diagnostics/push_wrong_type.kal:2:40
+  |
+2 | { let mut v: Vec<i64> = vec(); push(v, true); };
+  |                                        ^^^^
+1 個のエラーで中断しました

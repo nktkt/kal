@@ -1,0 +1,2 @@
+# push needs a mutable Vec (declared `let mut`).
+{ let v: Vec<i64> = vec(); push(v, 1); };

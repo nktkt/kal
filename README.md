@@ -74,7 +74,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 **`struct`s** and **`enum`s** (algebraic data types) — both optionally
 **generic** (`Name<T, …>`, with `Option<T>` / `Result<T, E>` built in) —
 **tuples** `(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`,
-**references** `&T` / `&mut T`, and the heap-allocated **`Box<T>`**.
+**references** `&T` / `&mut T`, the heap-allocated **`Box<T>`**, and the growable
+**`Vec<T>`**.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 Boolean literals are `true` and `false`.
@@ -395,15 +396,43 @@ sum(Cons(10, box(Cons(20, box(Nil)))));      # => 30
 A box is **freed automatically** when its owner goes out of scope (Drop/RAII) —
 at block end, function end, or an early `return`/`?`. A value that was moved out
 isn't dropped (tracked per-local, so conditional moves are handled), and the drop
-recurses into structs/enums/tuples/arrays. So the list above frees every node
-with no leak and no double-free.
+recurses into structs/enums/tuples/arrays/`Vec`. So the list above frees every
+node with no leak and no double-free.
+
+### `Vec<T>` (growable array)
+
+`Vec<T>` is a heap-backed dynamic array. `vec()` makes an empty one (its element
+type is inferred from the annotation), `push(v, x)` appends (reallocating as it
+grows), `len(v)` is the length, and `v[i]` reads or writes an element (with a
+runtime bounds check). A `Vec` owns its buffer, so it is dropped automatically —
+each live element is dropped, then the buffer is freed.
+
+```
+let mut v: Vec<i64> = vec();
+push(v, 10); push(v, 20); push(v, 30);
+len(v);            # => 3
+v[1] = 99;
+v[1];              # => 99
+```
+
+`push(v, x)` requires `v` to be a mutable place (`let mut`) and **moves** `x` in.
+Like a slice, you cannot move a non-`Copy` element out by indexing (`let b = v[0]`
+on a `Vec<Box<_>>` is rejected) — read `Copy` elements or borrow instead.
+
+> **Note:** an owned heap value (`Box`/`Vec`) that is produced but never bound to
+> a name (a discarded *temporary*) is not yet freed — bind it to a `let` to have
+> it dropped. Also, a borrow of an element (`&v[i]`) must not be held across a
+> `push` (which may reallocate); the borrow checker (future work) will enforce
+> this. Both are memory-*safe* (a temporary leaks; neither double-frees).
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
 - `putchard(x: i64)` — write the character with code `x` (`putchard(10)` is a newline)
-- `len(s: &[T]) -> i64` — the length of a slice
+- `len(s: &[T] | Vec<T>) -> i64` — the length of a slice or `Vec`
 - `box(x: T) -> Box<T>` — move `x` onto the heap
+- `vec() -> Vec<T>` — a new empty growable array (element type from context)
+- `push(v: Vec<T>, x: T)` — append `x` to a mutable `Vec` (grows as needed)
 
 ### Comments
 `#` to end of line.

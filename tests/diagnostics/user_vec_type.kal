@@ -1,0 +1,2 @@
+# Vec is a built-in type and cannot be redefined.
+struct Vec { x: i64 }

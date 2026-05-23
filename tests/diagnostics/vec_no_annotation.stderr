@@ -1,0 +1,6 @@
+error[E0251]: vec の要素型を推論できません (`let v: Vec<T> = vec();` のように型注釈を付けてください)
+ --> tests/diagnostics/vec_no_annotation.kal:2:30
+  |
+2 | fn make() -> i64 = { let v = vec(); 0 };
+  |                              ^^^^^
+1 個のエラーで中断しました

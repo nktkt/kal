@@ -46,6 +46,8 @@ std::string Type::str() const {
     return std::string("&") + (refMut ? "mut " : "") + "[" + elems[0].str() + "]";
   case Kind::Box:
     return "Box<" + elems[0].str() + ">";
+  case Kind::Vec:
+    return "Vec<" + elems[0].str() + ">";
   }
   return "<?>";
 }

@@ -48,7 +48,8 @@ instSubst(const std::vector<std::string> &params,
 bool CodeGen::needsDrop(const kal::Type &t) {
   switch (t.kind) {
   case kal::Type::Kind::Box:
-    return true; // Box 自身 (再帰せず即 true → 無限再帰しない)
+  case kal::Type::Kind::Vec:
+    return true; // ヒープを所有する (再帰せず即 true → 無限再帰しない)
   case kal::Type::Kind::Tuple:
   case kal::Type::Kind::Array:
     for (auto &e : t.elems)
@@ -127,10 +128,20 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &rawT) {
         ctx_, {PointerType::getUnqual(ctx_), llvm::Type::getInt64Ty(ctx_)});
   case kal::Type::Kind::Box:
     return PointerType::getUnqual(ctx_); // ヒープへのポインタ
+  case kal::Type::Kind::Vec:
+    return vecLLVMTy(); // { ptr, i64 len, i64 cap }
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
   return nullptr;
+}
+
+// Vec<T> の LLVM 表現 { 要素バッファへのポインタ, i64 長さ, i64 容量 }。
+// 要素型に依らず形は一定 (不透明ポインタ)。スライスと同じく len は添字 1。
+StructType *CodeGen::vecLLVMTy() {
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  return StructType::get(ctx_,
+                         {PointerType::getUnqual(ctx_), i64, i64});
 }
 
 StructType *CodeGen::getStructType(const kal::Type &rawType) {
@@ -377,6 +388,31 @@ Value *CodeGen::genAssign(const AssignExpr *e) {
   Value *v = genExpr(e->value.get());
   if (blockDone())
     return nullptr; // 対象/値の評価が発散
+  // 旧値が drop を要するなら、上書き前に解放する (さもないとリーク)。
+  kal::Type tt = typeSubst_.empty() ? e->target->type
+                                    : substType(e->target->type, typeSubst_);
+  if (needsDrop(tt)) {
+    if (e->target->kind == Expr::Kind::Variable) {
+      // 登録済みローカル: flag ガードで旧値を drop し (ムーブ済みなら何もしない)、
+      // 新値は生存するので flag を立て直す。
+      DropEntry *de = nullptr;
+      for (auto &scope : dropScopes_)
+        for (auto &d : scope)
+          if (d.slot == addr)
+            de = &d;
+      if (de) {
+        emitDrop(de->slot, de->flag, de->type); // live なら drop し flag=false
+        builder_.CreateStore(v, addr);
+        builder_.CreateStore(builder_.getInt1(true), de->flag);
+        return nullptr;
+      }
+      // 登録が見つからない場合は安全側 (drop しない) に倒す。
+    } else {
+      // サブプレース (v[i] / s.f / *p): 旧値はコンテナが生存している限り生きて
+      // いるので、その場で無条件に drop する。
+      builder_.CreateCall(getDropFn(tt), {addr});
+    }
+  }
   builder_.CreateStore(v, addr);
   return nullptr; // 代入式は unit
 }
@@ -463,6 +499,39 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
                               : nullptr);
         namedValues_[arm.bindings[i]] = bslot;
         registerLocal(bslot, arm.payloadTypes[i]); // ドロップ対象なら登録
+      }
+    }
+
+    // 値で match した場合、対象 enum はこの match が所有する。このアームで
+    // 束縛しなかったペイロードはどこからも drop されないのでここで解放する。
+    // (参照経由の match は借用なので何も drop しない)
+    if (!e->scrutinee->type.isRef()) {
+      if (arm.isWildcard) {
+        // ワイルドカード: バリアント不明 + 束縛なし → enum 全体を drop。
+        kal::Type st = typeSubst_.empty()
+                           ? e->scrutinee->type
+                           : substType(e->scrutinee->type, typeSubst_);
+        if (needsDrop(st))
+          builder_.CreateCall(getDropFn(st), {slot});
+      } else if (!arm.payloadTypes.empty()) {
+        std::vector<llvm::Type *> fts;
+        for (auto &pt : arm.payloadTypes)
+          fts.push_back(toLLVM(pt));
+        StructType *vs = StructType::get(ctx_, fts);
+        Value *payPtr = builder_.CreateStructGEP(et, slot, 1, "payptr");
+        for (size_t i = 0; i < arm.payloadTypes.size(); ++i) {
+          bool bound = i < arm.bindings.size() && arm.bindings[i] != "_";
+          if (bound)
+            continue; // 束縛済みは binding ローカルが drop する
+          kal::Type pt = typeSubst_.empty()
+                             ? arm.payloadTypes[i]
+                             : substType(arm.payloadTypes[i], typeSubst_);
+          if (!needsDrop(pt))
+            continue;
+          Value *fp = builder_.CreateStructGEP(vs, payPtr,
+                                               static_cast<unsigned>(i), "updr");
+          builder_.CreateCall(getDropFn(pt), {fp});
+        }
       }
     }
 
@@ -591,11 +660,12 @@ Value *CodeGen::genAddr(const Expr *e) {
     auto *ix = static_cast<const IndexExpr *>(e);
     Value *idx = genExpr(ix->index.get());
     llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
-    if (ix->base->type.isSlice()) {
-      // スライス {ptr, len}: 先頭ポインタから要素型で GEP {idx}
+    if (ix->base->type.isSlice() || ix->base->type.isVec()) {
+      // スライス {ptr,len} / Vec {ptr,len,cap}: どちらも添字 0=ポインタ・1=長さ。
+      // 先頭ポインタから要素型で GEP {idx}。
       Value *s = genExpr(ix->base.get());
-      Value *data = builder_.CreateExtractValue(s, {0}, "sliceptr");
-      Value *len = builder_.CreateExtractValue(s, {1}, "slicelen");
+      Value *data = builder_.CreateExtractValue(s, {0}, "dataptr");
+      Value *len = builder_.CreateExtractValue(s, {1}, "datalen");
       emitBoundsCheck(idx, ix->index->type, len); // 境界チェック
       llvm::Type *elemTy = toLLVM(ix->base->type.elemType());
       return builder_.CreateGEP(elemTy, data, {idx}, "elemptr");
@@ -749,6 +819,11 @@ Value *CodeGen::genUnary(const UnaryExpr *e) {
 }
 
 Value *CodeGen::genCall(const CallExpr *e) {
+  // Vec 組み込みは引数の評価方法が特殊 (push は第1引数を場所として扱う)。
+  if (e->isVecBuiltin)
+    return genVecNew(e);
+  if (e->isPushBuiltin)
+    return genPush(e);
   std::vector<Value *> args;
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
@@ -835,6 +910,35 @@ void CodeGen::genDropBody(const kal::Type &t, llvm::Function *fn) {
     if (needsDrop(t.boxedType()))
       builder_.CreateCall(getDropFn(t.boxedType()), {bp});
     builder_.CreateCall(module_->getFunction("free"), {bp});
+  } else if (t.isVec()) {
+    // 生存要素 (0..len) を drop してからバッファを free する
+    StructType *vt = vecLLVMTy();
+    llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+    Value *data = builder_.CreateLoad(
+        ptrTy, builder_.CreateStructGEP(vt, p, 0, "dataptr"), "data");
+    const kal::Type &et = t.elemType();
+    if (needsDrop(et)) {
+      Value *len = builder_.CreateLoad(
+          i64, builder_.CreateStructGEP(vt, p, 1, "lenptr"), "len");
+      llvm::Type *elemTy = toLLVM(et);
+      AllocaInst *iSlot = builder_.CreateAlloca(i64, nullptr, "i");
+      builder_.CreateStore(ConstantInt::get(i64, 0), iSlot);
+      BasicBlock *cond = BasicBlock::Create(ctx_, "vdrop.cond", fn);
+      BasicBlock *body = BasicBlock::Create(ctx_, "vdrop.body", fn);
+      BasicBlock *end = BasicBlock::Create(ctx_, "vdrop.end", fn);
+      builder_.CreateBr(cond);
+      builder_.SetInsertPoint(cond);
+      Value *i = builder_.CreateLoad(i64, iSlot, "i");
+      builder_.CreateCondBr(builder_.CreateICmpULT(i, len, "more"), body, end);
+      builder_.SetInsertPoint(body);
+      Value *ep = builder_.CreateGEP(elemTy, data, {i}, "elemptr");
+      builder_.CreateCall(getDropFn(et), {ep});
+      builder_.CreateStore(
+          builder_.CreateAdd(i, ConstantInt::get(i64, 1), "inext"), iSlot);
+      builder_.CreateBr(cond);
+      builder_.SetInsertPoint(end);
+    }
+    builder_.CreateCall(module_->getFunction("free"), {data}); // free(null) は安全
   } else if (t.isTuple() || t.isArray()) {
     llvm::Type *aggTy = toLLVM(t);
     size_t n = t.isArray() ? t.arrayLen : t.elems.size();
@@ -1017,6 +1121,70 @@ Value *CodeGen::genTry(const TryExpr *e) {
   Value *pv = builder_.CreateLoad(
       okVs, builder_.CreateStructGEP(et, slot, 1, "okptr"), "okld");
   return builder_.CreateExtractValue(pv, {0u}, "tryval");
+}
+
+// 組み込み vec(): 空の Vec { null, 0, 0 } を返す (容量は最初の push で確保)。
+Value *CodeGen::genVecNew(const CallExpr *e) {
+  (void)e;
+  StructType *vt = vecLLVMTy();
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  Constant *z = ConstantInt::get(i64, 0);
+  return ConstantStruct::get(
+      vt, {ConstantPointerNull::get(PointerType::getUnqual(ctx_)), z, z});
+}
+
+// 組み込み push(v, x): v は可変な場所。容量が足りなければ倍々で realloc し、
+// 末尾に x を書き込んで長さを 1 増やす。値の位置としては unit。
+Value *CodeGen::genPush(const CallExpr *e) {
+  Value *vecPtr = genAddr(e->args[0].get()); // Vec{ptr,len,cap} の場所
+  if (blockDone())
+    return nullptr;
+  Value *x = genExpr(e->args[1].get()); // push する値 (ムーブで入る)
+  if (blockDone())
+    return nullptr;
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+  StructType *vt = vecLLVMTy();
+  kal::Type elemT = typeSubst_.empty()
+                        ? e->args[1]->type
+                        : substType(e->args[1]->type, typeSubst_);
+  llvm::Type *elemTy = toLLVM(elemT);
+  uint64_t esz = dl_.getTypeAllocSize(elemTy).getFixedValue();
+
+  Value *dataPtr = builder_.CreateStructGEP(vt, vecPtr, 0, "dataptr");
+  Value *lenPtr = builder_.CreateStructGEP(vt, vecPtr, 1, "lenptr");
+  Value *capPtr = builder_.CreateStructGEP(vt, vecPtr, 2, "capptr");
+  Value *len = builder_.CreateLoad(i64, lenPtr, "len");
+  Value *cap = builder_.CreateLoad(i64, capPtr, "cap");
+
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock *growBB = BasicBlock::Create(ctx_, "vec.grow", fn);
+  BasicBlock *contBB = BasicBlock::Create(ctx_, "vec.cont", fn);
+  builder_.CreateCondBr(builder_.CreateICmpEQ(len, cap, "full"), growBB, contBB);
+
+  // 成長: 容量 0 なら 4、そうでなければ 2 倍にして realloc する。
+  builder_.SetInsertPoint(growBB);
+  Value *isZero = builder_.CreateICmpEQ(cap, ConstantInt::get(i64, 0), "cap0");
+  Value *newCap = builder_.CreateSelect(
+      isZero, ConstantInt::get(i64, 4),
+      builder_.CreateMul(cap, ConstantInt::get(i64, 2), "cap2"), "newcap");
+  Value *bytes =
+      builder_.CreateMul(newCap, ConstantInt::get(i64, esz), "bytes");
+  Value *oldData = builder_.CreateLoad(ptrTy, dataPtr, "olddata");
+  Value *newData = builder_.CreateCall(module_->getFunction("realloc"),
+                                       {oldData, bytes}, "newdata");
+  builder_.CreateStore(newData, dataPtr);
+  builder_.CreateStore(newCap, capPtr);
+  builder_.CreateBr(contBB);
+
+  // 追記: data[len] = x; len += 1
+  builder_.SetInsertPoint(contBB);
+  Value *data = builder_.CreateLoad(ptrTy, dataPtr, "data");
+  Value *slot = builder_.CreateGEP(elemTy, data, {len}, "slot");
+  builder_.CreateStore(x, slot);
+  builder_.CreateStore(builder_.CreateAdd(len, ConstantInt::get(i64, 1), "len1"),
+                       lenPtr);
+  return nullptr; // unit
 }
 
 Value *CodeGen::genCast(const CastExpr *e) {
@@ -1308,6 +1476,8 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   ensure("kal_panic", voidTy, {}); // 境界違反などで呼ぶ (メッセージ表示して終了)
   ensure("malloc", PointerType::getUnqual(ctx_), {i64}); // box(e) のヒープ確保
   ensure("free", voidTy, {PointerType::getUnqual(ctx_)}); // Drop のヒープ解放
+  ensure("realloc", PointerType::getUnqual(ctx_),
+         {PointerType::getUnqual(ctx_), i64}); // Vec の成長
 
   // (2) 関数本体 (非総称のみ。ジェネリックは呼び出しから単態化される)
   for (auto &f : program.functions)

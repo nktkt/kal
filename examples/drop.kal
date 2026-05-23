@@ -1,0 +1,32 @@
+# Drop / RAII: 所有ヒープ (Box / Vec) はスコープを抜けると自動で解放される。
+# ここでは「上書き代入」と「match の未束縛ペイロード」でも正しく解放されることを示す。
+
+# 1. droppable な場所への上書き代入は、旧値を先に drop してから書き込む。
+{
+  let mut v: Vec<i64> = vec();
+  push(v, 1); push(v, 2); push(v, 3);
+  v = vec();              # 旧バッファ (1,2,3) を解放してから空 Vec を代入
+  push(v, 100);
+  printi(len(v));        # => 1
+};
+
+# 2. 要素 (Box) の上書きも、旧 Box を解放してから書き込む。
+{
+  let mut bs: Vec<Box<i64>> = vec();
+  push(bs, box(1));
+  bs[0] = box(42);       # 旧 box(1) を解放してから box(42) を格納
+  printi(*bs[0]);        # => 42
+};
+
+# 3. 値で match したとき、アームが束縛しなかったペイロードも解放される。
+enum Holder { Full(Vec<Box<i64>>), Empty }
+fn count(h: Holder) -> i64 =
+  match h {
+    Full(_) => 1,        # ペイロードの Vec<Box> は束縛しないが解放される
+    Empty   => 0,
+  };
+{
+  let mut w: Vec<Box<i64>> = vec();
+  push(w, box(7)); push(w, box(8));
+  printi(count(Full(w)));   # => 1
+};

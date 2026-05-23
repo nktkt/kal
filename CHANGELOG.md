@@ -5,6 +5,23 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **`Vec<T>` (growable array):** a heap-backed dynamic array. `vec()` creates an
+  empty one (element type inferred from the annotation), `push(v, x)` appends
+  (reallocating, doubling capacity), `len(v)` is the length, and `v[i]`
+  reads/writes an element with a runtime bounds check. A `Vec` owns its buffer:
+  Drop frees every live element and then the buffer. `push` requires a mutable
+  place and moves the value in; non-`Copy` elements can't be moved out by
+  indexing (like slices). Works as a field/payload, nested (`Vec<Vec<T>>`), and
+  through generics. Verified leak-free (incl. `Vec<Box<_>>` across reallocs) with
+  `leaks` and malloc guards. Diagnostics `E0050`/`E0184`/`E0250`–`E0255`.
+  *Known limitation:* a discarded owned-heap **temporary** (an unbound `Box`/`Vec`)
+  is not dropped yet (memory-safe leak); bind it to a `let`.
+- **Drop completeness:** plugged two leak holes the `Vec` audit surfaced (both
+  also affected `Box`, both memory-safe — leaks only, never double-free):
+  assigning over a droppable place (`v = …`, `v[i] = …`, `s.f = …`, `*p = …`) now
+  **drops the old value first** (and a move-then-reassign keeps the new value
+  live), and a by-value `match` now **drops payloads that an arm doesn't bind**
+  (`_`, wildcard arms, partially-bound variants).
 - **Drop / RAII:** owned heap (`Box`) is now **freed automatically** when it goes
   out of scope — at block end, function end, and on early `return`/`?`. Moved-out
   values aren't dropped (tracked with per-local drop flags, so conditional moves
