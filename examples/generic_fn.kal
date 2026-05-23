@@ -1,0 +1,44 @@
+# ジェネリック関数: 呼び出しごとに型引数を推論して単態化される。
+# トレイト境界がまだないので本体は「型に依存しない」操作 (受け渡し・match・
+# enum/struct 構築) に限られるが、Option/Result の定番ヘルパが書ける。
+
+# Option<T> をデフォルト値付きで取り出す (任意の T で動く)。
+fn unwrap_or<T>(o: Option<T>, dflt: T) -> T =
+  match o {
+    Some(x) => x,
+    None    => dflt,
+  };
+
+# Option<T> を Result<T, E> に変換する。
+fn ok_or<T, E>(o: Option<T>, err: E) -> Result<T, E> =
+  match o {
+    Some(x) => Ok(x),
+    None    => Err(err),
+  };
+
+fn checked_div(a: i64, b: i64) -> Option<i64> =
+  if b == 0 then None else Some(a / b);
+
+# 同じ unwrap_or を i64 と f64 の両方で具体化する。
+printi(unwrap_or(checked_div(10, 2), -1));   # => 5     (unwrap_or<i64>)
+printi(unwrap_or(checked_div(10, 0), -1));   # => -1
+printd(unwrap_or(Some(3.5), 0.0));           # => 3.5   (unwrap_or<f64>)
+
+# ok_or で Option を Result に変換し、エラーコードで報告する。
+fn report(r: Result<i64, i64>) -> i64 =
+  match r { Ok(v) => v, Err(e) => 0 - e };
+
+printi(report(ok_or(checked_div(20, 4), 9)));   # => 5
+printi(report(ok_or(checked_div(20, 0), 9)));   # => -9   (None → Err(9) → -9)
+
+# ジェネリック struct とも組み合わせられる。
+struct Pair<A, B> { first: A, second: B }
+
+fn mkpair<A, B>(a: A, b: B) -> Pair<A, B> = Pair { first: a, second: b };
+fn first_of<A, B>(p: Pair<A, B>) -> A = p.first;
+
+printi(first_of(Pair { first: 7, second: 100 }));   # => 7
+
+# ネストしたジェネリック呼び出し: 外側 first_of の A は戻り値から、内側 mkpair の
+# B は引数 9.5 から推論される (A=i64, B=f64)。
+printi(first_of(mkpair(8, 9.5)));                    # => 8

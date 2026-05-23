@@ -1,0 +1,2 @@
+# extern (C) functions are concrete; they cannot be generic.
+extern foo<T>(x: T) -> T;

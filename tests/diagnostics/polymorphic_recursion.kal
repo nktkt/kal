@@ -1,0 +1,4 @@
+# Polymorphic recursion (the type grows at each call) cannot be monomorphized;
+# it is capped instead of looping forever.
+fn boom<T>(x: T) -> i64 = boom(Some(x));
+printi(boom(1));

@@ -224,6 +224,18 @@ struct Pair<A, B> { first: A, second: B }    # ジェネリック struct
 Pair { first: 3, second: 4.0 }.second;        # => 4   (Pair<i32, f64>)
 ```
 
+**関数**もジェネリックにできます（`fn name<T, …>(…)`）。呼び出しごとに単態化され、
+本体は型引数を抽象のまま一度だけ検査されます。トレイト境界がないため本体は
+「型に依存しない操作」に限られますが、`Option`/`Result` のヘルパにはこれで十分です:
+
+```
+fn unwrap_or<T>(o: Option<T>, dflt: T) -> T =
+  match o { Some(x) => x, None => dflt };
+
+unwrap_or(checked_div(10, 2), -1);    # => 5     (unwrap_or<i64>)
+unwrap_or(Some(3.5), 0.0);            # => 3.5   (同じ定義を unwrap_or<f64> として)
+```
+
 `Option<T>` と `Result<T, E>` は組み込み（prelude）なので、`Some`/`None`・
 `Ok`/`Err` はいつでも使えます:
 
@@ -245,8 +257,8 @@ enum Result<T, E> { Ok(T), Err(E) }
 
 推論できない箇所では型引数の明示が必要です（例: 裸の `None` には `: Option<i64>` の
 注釈か型の決まった文脈が必要）。値として再帰する型（例 `enum List<T> { Cons(T, List<T>), Nil }`）は
-無限サイズになるため拒否されます――参照・スライスによる間接化が必要です。総称**関数** は
-未実装です（[ROADMAP.md](ROADMAP.md)）。
+無限サイズになるため拒否されます――参照・スライスによる間接化が必要です。次の一歩は
+トレイト境界（本体で値の受け渡し以上のことができるようになる）です（[ROADMAP.md](ROADMAP.md)）。
 
 ### 参照
 
@@ -306,7 +318,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

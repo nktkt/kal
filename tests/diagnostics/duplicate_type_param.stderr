@@ -1,0 +1,6 @@
+error[E0048]: 型引数名が重複しています: T
+ --> tests/diagnostics/duplicate_type_param.kal:2:4
+  |
+2 | fn f<T, T>(a: T, b: T) -> T = b;
+  |    ^
+1 個のエラーで中断しました

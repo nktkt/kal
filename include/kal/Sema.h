@@ -68,6 +68,9 @@ private:
   void unifyParam(const Type &decl, const Type &actual,
                   std::map<std::string, Type> &subst) const; // 型引数を推論
   static bool hasParam(const Type &t); // 未解決の Param を含むか
+  // 検査中の関数の型引数 (activeTypeParams_) でない Param を含むか。
+  // = 「解くべき推論変数」(値から決める) かどうかの判定。
+  bool hasNonActiveParam(const Type &t) const;
 
   struct Local {
     Type type;
@@ -76,10 +79,12 @@ private:
 
   DiagnosticEngine &diag_;
   std::map<std::string, FuncSig> funcs_;
+  std::map<std::string, const Prototype *> genericFuncs_; // ジェネリック関数
   std::map<std::string, Local> locals_;
   std::map<std::string, const StructDef *> structs_;
   std::map<std::string, const EnumDef *> enums_;
   std::map<std::string, VariantInfo> variants_;
+  std::set<std::string> activeTypeParams_; // 検査中の関数の型引数 (resolve 用)
 };
 
 } // namespace kal

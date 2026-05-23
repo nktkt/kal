@@ -20,6 +20,9 @@ const EnumDef *Sema::findEnum(const std::string &name) const {
 }
 
 Type Sema::resolve(Type t) const {
+  // 検査中のジェネリック関数の型引数名は Param へ (本体の let/as 注釈用)
+  if (t.kind == Type::Kind::Struct && activeTypeParams_.count(t.name))
+    return Type::paramTy(t.name);
   if (t.kind == Type::Kind::Struct && findEnum(t.name))
     t.kind = Type::Kind::Enum; // パーサが Struct と誤判定した enum 名を直す
   // 複合型の要素・型引数を再帰的に解決 (Tuple/Ref/Array/Slice/Struct/Enum)
@@ -54,7 +57,9 @@ Type Sema::substType(const Type &t,
 void Sema::unifyParam(const Type &decl, const Type &actual,
                       std::map<std::string, Type> &subst) const {
   if (decl.isParam()) {
-    if (actual.isKnown() && !subst.count(decl.name))
+    // 推論変数 (非アクティブ Param) を含む actual は束縛しない。
+    // (外側の未解決型引数が漏れた期待型のケース。引数側の推論に委ねる)
+    if (actual.isKnown() && !hasNonActiveParam(actual) && !subst.count(decl.name))
       subst[decl.name] = actual;
     return;
   }
@@ -68,6 +73,15 @@ bool Sema::hasParam(const Type &t) {
     return true;
   for (auto &e : t.elems)
     if (hasParam(e))
+      return true;
+  return false;
+}
+
+bool Sema::hasNonActiveParam(const Type &t) const {
+  if (t.isParam())
+    return activeTypeParams_.count(t.name) == 0; // 検査中の型引数でなければ推論変数
+  for (auto &e : t.elems)
+    if (hasNonActiveParam(e))
       return true;
   return false;
 }
@@ -105,6 +119,25 @@ bool Sema::run(Program &program) {
     enums_[ed->name] = ed.get();
   }
 
+  // 型引数名の検査 (組み込み型名との衝突 / 同一リスト内の重複)
+  auto checkTypeParams = [&](const std::vector<std::string> &tps, Span span) {
+    std::set<std::string> seen;
+    for (auto &p : tps) {
+      Type dummy;
+      if (typeFromName(p, dummy))
+        diag_.error(span, "E0047",
+                    "型引数名が組み込み型名と衝突しています: " + p);
+      if (!seen.insert(p).second)
+        diag_.error(span, "E0048", "型引数名が重複しています: " + p);
+    }
+  };
+  for (auto &sd : program.structs)
+    checkTypeParams(sd->typeParams, sd->nameSpan);
+  for (auto &ed : program.enums)
+    checkTypeParams(ed->typeParams, ed->nameSpan);
+  for (auto &f : program.functions)
+    checkTypeParams(f->proto->typeParams, f->proto->nameSpan);
+
   // (2) 注釈された型を解決 (enum 名を Struct→Enum に直す)
   for (auto &sd : program.structs) {
     std::set<std::string> params(sd->typeParams.begin(), sd->typeParams.end());
@@ -125,9 +158,11 @@ bool Sema::run(Program &program) {
     ex->retType = resolve(ex->retType);
   }
   for (auto &f : program.functions) {
+    std::set<std::string> params(f->proto->typeParams.begin(),
+                                 f->proto->typeParams.end());
     for (auto &pt : f->proto->paramTypes)
-      pt = resolve(pt);
-    f->proto->retType = resolve(f->proto->retType);
+      pt = resolve(bindParams(pt, params)); // 型引数名を Param へ
+    f->proto->retType = resolve(bindParams(f->proto->retType, params));
   }
 
   // (3) 型存在チェック (Ref/Tuple は再帰的に)
@@ -172,6 +207,10 @@ bool Sema::run(Program &program) {
         if (!knownType(pt))
           diag_.error(v.span, "E0046", "未定義または不正な型です: " + pt.str());
   for (auto &ex : program.externs) {
+    if (!ex->typeParams.empty()) {
+      diag_.error(ex->span, "E0098", "extern 関数はジェネリックにできません");
+      continue; // 型引数を含むシグネチャは検査しない
+    }
     for (auto &pt : ex->paramTypes)
       if (!knownType(pt))
         diag_.error(ex->span, "E0046", "未定義または不正な型です: " + pt.str());
@@ -248,11 +287,17 @@ bool Sema::run(Program &program) {
   funcs_["printd"] = {{Type::floatTy(64)}, Type::unit()};
   funcs_["putchard"] = {{Type::intTy(64, true)}, Type::unit()};
 
-  // ユーザー定義のシグネチャを先に集める (前方参照・相互再帰に対応)
+  // ユーザー定義のシグネチャを先に集める (前方参照・相互再帰に対応)。
+  // (ジェネリック extern は上で E0098 済み。funcs_ には入れない)
   for (auto &ex : program.externs)
-    funcs_[ex->name] = {ex->paramTypes, ex->retType};
-  for (auto &f : program.functions)
-    funcs_[f->proto->name] = {f->proto->paramTypes, f->proto->retType};
+    if (ex->typeParams.empty())
+      funcs_[ex->name] = {ex->paramTypes, ex->retType};
+  for (auto &f : program.functions) {
+    if (f->proto->typeParams.empty())
+      funcs_[f->proto->name] = {f->proto->paramTypes, f->proto->retType};
+    else
+      genericFuncs_[f->proto->name] = f->proto.get(); // ジェネリックは別管理
+  }
 
   // 各関数本体を検査
   for (auto &f : program.functions)
@@ -267,6 +312,8 @@ bool Sema::run(Program &program) {
 
 void Sema::checkFunction(FunctionDef &f) {
   locals_.clear();
+  // ジェネリック関数なら型引数をスコープに入れる (本体の型注釈で Param 化)
+  activeTypeParams_ = {f.proto->typeParams.begin(), f.proto->typeParams.end()};
   for (size_t i = 0; i < f.proto->args.size(); ++i)
     locals_[f.proto->args[i]] = {f.proto->paramTypes[i], /*isMut=*/false};
 
@@ -276,6 +323,7 @@ void Sema::checkFunction(FunctionDef &f) {
                 "戻り値の型が一致しません (期待 " + f.proto->retType.str() +
                     ", 実際 " + bodyT.str() + ")");
   }
+  activeTypeParams_.clear();
 }
 
 Type Sema::check(Expr *e, std::optional<Type> expected) {
@@ -482,6 +530,52 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
     return Type::intTy(64, true);
   }
 
+  // ジェネリック関数呼び出し: 期待型 + 引数から型引数を推論する (turbofish 不要)。
+  auto git = genericFuncs_.find(e->callee);
+  if (git != genericFuncs_.end()) {
+    const Prototype *proto = git->second;
+    if (proto->paramTypes.size() != e->args.size()) {
+      diag_.error(e->span, "E0103",
+                  "引数の数が一致しません (期待 " +
+                      std::to_string(proto->paramTypes.size()) + ", 実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unknown();
+    }
+    std::map<std::string, Type> subst;
+    if (expected)
+      unifyParam(proto->retType, *expected, subst); // 期待型から推論
+    for (size_t i = 0; i < e->args.size(); ++i) {
+      // 部分的に解決済みのヒントを渡す (具体部分は伝播し、未解決 Param は
+      // リテラル側で無視される) → 引数から残りの型引数を推論
+      Type at = check(e->args[i].get(),
+                      std::optional<Type>(substType(proto->paramTypes[i], subst)));
+      unifyParam(proto->paramTypes[i], at, subst);
+    }
+    std::vector<Type> targs;
+    for (auto &p : proto->typeParams) {
+      auto sit = subst.find(p);
+      if (sit == subst.end()) {
+        diag_.error(e->span, "E0097",
+                    "型引数を推論できません: " + e->callee + " の " + p +
+                        " (型注釈が必要です)");
+        return Type::unknown();
+      }
+      targs.push_back(sit->second);
+    }
+    // 解決後の引数型で再検証
+    for (size_t i = 0; i < e->args.size(); ++i) {
+      Type want = substType(proto->paramTypes[i], subst);
+      if (e->args[i]->type.isKnown() && e->args[i]->type != want)
+        diag_.error(e->args[i]->span, "E0104",
+                    "引数の型が一致しません (期待 " + want.str() + ", 実際 " +
+                        e->args[i]->type.str() + ")");
+    }
+    e->typeArgs = std::move(targs);
+    return substType(proto->retType, subst);
+  }
+
   auto it = funcs_.find(e->callee);
   if (it == funcs_.end()) {
     // 関数でなければ enum バリアント構築かもしれない
@@ -512,12 +606,14 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
         }
         return Type::enumTy(vi.enumName);
       }
-      // ジェネリック: 期待型 + 引数から型引数を推論する
+      // ジェネリック: 期待型 + 引数から型引数を推論する。
+      // 推論変数 (非アクティブ Param) を含む期待要素は引数で決める。
       std::map<std::string, Type> subst;
       if (expected && expected->isEnum() && expected->name == vi.enumName &&
           expected->elems.size() == vi.typeParams.size())
         for (size_t i = 0; i < vi.typeParams.size(); ++i)
-          subst[vi.typeParams[i]] = expected->elems[i];
+          if (!hasNonActiveParam(expected->elems[i]))
+            subst[vi.typeParams[i]] = expected->elems[i];
       for (size_t i = 0; i < e->args.size(); ++i) {
         Type hint = substType(vi.payloadTypes[i], subst);
         Type at = check(e->args[i].get(),
@@ -685,12 +781,14 @@ Type Sema::checkStructLit(StructLitExpr *e, std::optional<Type> expected) {
     return Type::structTy(e->structName);
   }
 
-  // ジェネリック: 期待型 + フィールド値から型引数を推論する
+  // ジェネリック: 期待型 + フィールド値から型引数を推論する。
+  // 推論変数 (非アクティブ Param) を含む期待要素はフィールドで決める。
   std::map<std::string, Type> subst;
   if (expected && expected->isStruct() && expected->name == e->structName &&
       expected->elems.size() == sd->typeParams.size())
     for (size_t i = 0; i < sd->typeParams.size(); ++i)
-      subst[sd->typeParams[i]] = expected->elems[i];
+      if (!hasNonActiveParam(expected->elems[i]))
+        subst[sd->typeParams[i]] = expected->elems[i];
   for (size_t i = 0; i < e->fieldValues.size(); ++i) {
     const StructField *decl = findDecl(e->fieldNames[i]);
     if (!decl) {

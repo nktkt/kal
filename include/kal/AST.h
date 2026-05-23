@@ -216,6 +216,8 @@ struct CallExpr : Expr {
   std::string variantEnum;
   // Sema が、これが組み込み len(s) なら設定する (引数は借用・ムーブしない)
   bool isLenBuiltin = false;
+  // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
+  std::vector<Type> typeArgs;
   CallExpr(Span s, std::string callee, Span calleeSpan,
            std::vector<ExprPtr> args)
       : Expr(Kind::Call, s), callee(std::move(callee)), calleeSpan(calleeSpan),
@@ -239,9 +241,11 @@ struct ForExpr : Expr {
 };
 
 /// 関数プロトタイプ (引数名 + 引数型 + 戻り値型)。
+/// typeParams が空でなければジェネリック関数 (呼び出しごとに単態化される)。
 struct Prototype {
   std::string name;
   Span nameSpan;
+  std::vector<std::string> typeParams; // ジェネリックな型引数名 (空なら非総称)
   std::vector<std::string> args;
   std::vector<Type> paramTypes;
   Type retType;

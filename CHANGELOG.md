@@ -5,6 +5,13 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Generic functions:** `fn name<T, …>(…) -> …` — monomorphized per call. Type
+  arguments are **inferred** from the arguments and the expected type (no
+  turbofish). Bodies are type-checked once with the type parameters abstract, so
+  (lacking trait bounds) they are limited to type-agnostic operations — enough to
+  write `Option`/`Result` helpers like `fn unwrap_or<T>(o: Option<T>, d: T) -> T`
+  and `fn ok_or<T, E>(o: Option<T>, e: E) -> Result<T, E>`. Generic functions may
+  call other (and recursive) generic functions.
 - **Generics (enums + structs) + `Option`/`Result`:** generic enums
   `enum Name<T, …> { … }` and generic structs `struct Name<T, …> { … }`,
   monomorphized per concrete instantiation. Type arguments are written

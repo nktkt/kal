@@ -34,7 +34,9 @@ static kal::Type substType(const kal::Type &t,
   return r;
 }
 
-llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
+llvm::Type *CodeGen::toLLVM(const kal::Type &rawT) {
+  // ジェネリック単態化中なら型引数 (Param) を具体型へ置換する
+  kal::Type t = typeSubst_.empty() ? rawT : substType(rawT, typeSubst_);
   switch (t.kind) {
   case kal::Type::Kind::Bool:
     return llvm::Type::getInt1Ty(ctx_);
@@ -71,7 +73,9 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
   return nullptr;
 }
 
-StructType *CodeGen::getStructType(const kal::Type &structType) {
+StructType *CodeGen::getStructType(const kal::Type &rawType) {
+  kal::Type structType =
+      typeSubst_.empty() ? rawType : substType(rawType, typeSubst_);
   std::string mangled = structType.str(); // "Point" / "Pair<i64, f64>" など
   auto it = structTypes_.find(mangled);
   if (it != structTypes_.end())
@@ -93,7 +97,9 @@ StructType *CodeGen::getStructType(const kal::Type &structType) {
 // enum を { i64 tag, [S x i8] payload } で表す (S = 最大バリアントのサイズ)。
 // tag を i64 にすることで payload が 8 バイト境界に整列する。
 // ジェネリック enum は具体化 (型引数) ごとに別々の型として単態化する。
-StructType *CodeGen::getEnumType(const kal::Type &enumType) {
+StructType *CodeGen::getEnumType(const kal::Type &rawType) {
+  kal::Type enumType =
+      typeSubst_.empty() ? rawType : substType(rawType, typeSubst_);
   std::string mangled = enumType.str(); // "Shape" / "Option<i64>" など
   auto it = enumTypes_.find(mangled);
   if (it != enumTypes_.end())
@@ -571,6 +577,20 @@ Value *CodeGen::genCall(const CallExpr *e) {
   // 組み込み len(s): スライス {ptr, len} の len フィールドを取り出す
   if (e->isLenBuiltin)
     return builder_.CreateExtractValue(args[0], {1}, "len");
+  // ジェネリック関数呼び出し: 型引数を (単態化中なら) 具体化して呼ぶ
+  auto git = genericFuncDefs_.find(e->callee);
+  if (git != genericFuncDefs_.end()) {
+    std::vector<kal::Type> targs;
+    for (auto &ta : e->typeArgs)
+      targs.push_back(typeSubst_.empty() ? ta : substType(ta, typeSubst_));
+    Function *callee = ensureInstance(git->second, targs);
+    CallInst *call = builder_.CreateCall(callee, args);
+    kal::Type rt = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
+    if (rt.isUnit())
+      return nullptr;
+    call->setName("calltmp");
+    return call;
+  }
   Function *callee = module_->getFunction(e->callee);
   CallInst *call = builder_.CreateCall(callee, args);
   if (e->type.isUnit())
@@ -704,12 +724,19 @@ bool CodeGen::genFunction(const FunctionDef &f) {
   llvm::Function *fn = module_->getFunction(f.proto->name);
   if (!fn)
     return false;
+  return genFunctionInto(f, fn, {}, f.proto->retType);
+}
+
+bool CodeGen::genFunctionInto(const FunctionDef &f, llvm::Function *fn,
+                              const std::map<std::string, kal::Type> &subst,
+                              const kal::Type &retType) {
+  typeSubst_ = subst; // ジェネリック単態化中の型置換 (非総称は空)
 
   BasicBlock *bb = BasicBlock::Create(ctx_, "entry", fn);
   builder_.SetInsertPoint(bb);
 
   namedValues_.clear();
-  // 引数をメモリにコピー (アドレスを取れるように)
+  // 引数をメモリにコピー (アドレスを取れるように)。型は宣言済みなので具体的。
   for (auto &arg : fn->args()) {
     AllocaInst *slot = entryAlloca(arg.getType(), std::string(arg.getName()));
     builder_.CreateStore(&arg, slot);
@@ -717,12 +744,43 @@ bool CodeGen::genFunction(const FunctionDef &f) {
   }
 
   Value *ret = genExpr(f.body.get());
-  if (f.proto->retType.isUnit())
+  if (retType.isUnit())
     builder_.CreateRetVoid();
   else
     builder_.CreateRet(ret);
   verifyFunction(*fn);
+  typeSubst_.clear();
   return true;
+}
+
+// ジェネリック関数の具体化を宣言する (本体は後でキューから生成)。
+llvm::Function *CodeGen::ensureInstance(const FunctionDef *def,
+                                       const std::vector<kal::Type> &typeArgs) {
+  std::string mangled = def->proto->name + "<";
+  for (size_t i = 0; i < typeArgs.size(); ++i) {
+    if (i)
+      mangled += ", ";
+    mangled += typeArgs[i].str();
+  }
+  mangled += ">";
+  if (llvm::Function *existing = module_->getFunction(mangled))
+    return existing; // 宣言済み
+
+  std::map<std::string, kal::Type> subst;
+  for (size_t i = 0;
+       i < def->proto->typeParams.size() && i < typeArgs.size(); ++i)
+    subst[def->proto->typeParams[i]] = typeArgs[i];
+
+  // 具体化したプロトタイプを宣言 (型引数を代入した具体型で)
+  Prototype inst;
+  inst.name = mangled;
+  inst.args = def->proto->args;
+  for (auto &pt : def->proto->paramTypes)
+    inst.paramTypes.push_back(substType(pt, subst));
+  inst.retType = substType(def->proto->retType, subst);
+  llvm::Function *fn = declareProto(inst);
+  pendingInstances_.push_back({def, std::move(subst), mangled}); // 本体生成待ち
+  return fn;
 }
 
 std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
@@ -734,12 +792,16 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
     structDefs_[sd->name] = sd.get();
   for (auto &ed : program.enums)
     enumDefs_[ed->name] = ed.get();
+  // ジェネリック関数を登録 (本体は呼び出し箇所ごとに単態化する)
+  for (auto &f : program.functions)
+    if (!f->proto->typeParams.empty())
+      genericFuncDefs_[f->proto->name] = f.get();
 
-  // (1) 全プロトタイプを宣言 (前方参照・相互再帰に対応)
+  // (1) 全プロトタイプを宣言 (前方参照・相互再帰に対応)。ジェネリックは除く。
   for (auto &ex : program.externs)
     declareProto(*ex);
   for (auto &f : program.functions)
-    if (!module_->getFunction(f->proto->name))
+    if (f->proto->typeParams.empty() && !module_->getFunction(f->proto->name))
       declareProto(*f->proto);
 
   // 組み込み: printi(i64)->i64, printd(f64)->f64, putchard(i64)->i64
@@ -756,10 +818,11 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   ensure("printd", voidTy, {f64});
   ensure("putchard", voidTy, {i64});
 
-  // (2) 関数本体
+  // (2) 関数本体 (非総称のみ。ジェネリックは呼び出しから単態化される)
   for (auto &f : program.functions)
-    if (!genFunction(*f))
-      return nullptr;
+    if (f->proto->typeParams.empty())
+      if (!genFunction(*f))
+        return nullptr;
 
   // (3) トップレベル式を集めて __main を生成 (型に応じて自動表示)
   FunctionType *mainTy = FunctionType::get(llvm::Type::getVoidTy(ctx_), false);
@@ -789,6 +852,24 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   }
   builder_.CreateRetVoid();
   verifyFunction(*mainFn);
+
+  // (4) ジェネリック関数の具体化を本体生成する。生成中にさらに別の具体化が
+  // 要求されることがあるためキューが空になるまで繰り返す (相互/自己再帰対応)。
+  // 多相再帰 (型が単調増加して止まらない) を防ぐため具体化数に上限を設ける。
+  const size_t kInstanceLimit = 128;
+  size_t instCount = 0;
+  while (!pendingInstances_.empty()) {
+    if (++instCount > kInstanceLimit) {
+      diag_.error(pendingInstances_.back().def->proto->nameSpan, "E0199",
+                  "ジェネリックの具体化が多すぎます (多相再帰の可能性があります)");
+      break;
+    }
+    PendingInstance inst = std::move(pendingInstances_.back());
+    pendingInstances_.pop_back();
+    llvm::Function *fn = module_->getFunction(inst.mangled);
+    kal::Type retType = substType(inst.def->proto->retType, inst.subst);
+    genFunctionInto(*inst.def, fn, inst.subst, retType);
+  }
 
   // C の main を生成 (AOT/JIT 共通。JIT は __main を直接呼ぶので未使用)
   emitCMain();

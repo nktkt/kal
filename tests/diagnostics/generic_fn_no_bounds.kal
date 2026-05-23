@@ -1,0 +1,3 @@
+# Without trait bounds, a type parameter supports no operations.
+# `x + x` requires a numeric type, which T is not (in general).
+fn dbl<T>(x: T) -> T = x + x;

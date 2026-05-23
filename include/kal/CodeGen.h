@@ -9,7 +9,9 @@
 #include "llvm/IR/Module.h"
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace kal {
 
@@ -62,6 +64,13 @@ private:
   llvm::StructType *getEnumType(const Type &enumType);
   llvm::Function *declareProto(const Prototype &p);
   bool genFunction(const FunctionDef &f);
+  // 関数本体を fn に生成する。subst はジェネリック単態化の型置換 (非総称は空)。
+  bool genFunctionInto(const FunctionDef &f, llvm::Function *fn,
+                       const std::map<std::string, Type> &subst,
+                       const Type &retType);
+  // ジェネリック関数の具体化を宣言し (未処理なら) 生成キューへ積む。
+  llvm::Function *ensureInstance(const FunctionDef *def,
+                                 const std::vector<Type> &typeArgs);
   void emitRuntimeDefs(); // printi/printd/putchard の本体 (libc 呼び出し)
   void emitCMain();       // i32 main() { __main(); return 0; }
 
@@ -75,6 +84,16 @@ private:
   std::map<std::string, llvm::StructType *> structTypes_;
   std::map<std::string, const EnumDef *> enumDefs_;
   std::map<std::string, llvm::StructType *> enumTypes_;
+
+  // ジェネリック関数とその単態化
+  std::map<std::string, const FunctionDef *> genericFuncDefs_;
+  std::map<std::string, Type> typeSubst_; // 現在生成中インスタンスの型置換
+  struct PendingInstance {
+    const FunctionDef *def;
+    std::map<std::string, Type> subst;
+    std::string mangled;
+  };
+  std::vector<PendingInstance> pendingInstances_; // 本体生成待ちの具体化
 };
 
 } // namespace kal

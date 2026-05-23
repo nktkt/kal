@@ -1,0 +1,6 @@
+error[E0199]: ジェネリックの具体化が多すぎます (多相再帰の可能性があります)
+ --> tests/diagnostics/polymorphic_recursion.kal:3:4
+  |
+3 | fn boom<T>(x: T) -> i64 = boom(Some(x));
+  |    ^^^^
+1 個のエラーで中断しました

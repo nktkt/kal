@@ -1,0 +1,4 @@
+# T appears only in the return type and there are no arguments, so it cannot
+# be inferred without an expected type.
+fn make<T>() -> Option<T> = None;
+make();

@@ -1,0 +1,6 @@
+error[E0098]: extern 関数はジェネリックにできません
+ --> tests/diagnostics/generic_extern.kal:2:8
+  |
+2 | extern foo<T>(x: T) -> T;
+  |        ^^^^^^^^^^^^
+1 個のエラーで中断しました

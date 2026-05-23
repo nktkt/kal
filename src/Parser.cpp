@@ -736,6 +736,28 @@ std::unique_ptr<Prototype> Parser::parsePrototype() {
   std::string name = cur_.text;
   advance();
 
+  // 型引数:  <P1, P2, ...>  (省略時は非総称)
+  std::vector<std::string> typeParams;
+  if (cur_.kind == Tok::Less) {
+    advance();
+    for (;;) {
+      if (cur_.kind != Tok::Identifier) {
+        diag_.error(cur_.span, "E0087", "型引数名が必要です");
+        return nullptr;
+      }
+      typeParams.push_back(cur_.text);
+      advance();
+      if (cur_.kind == Tok::Greater)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0088", "型引数には ',' か '>' が必要です");
+        return nullptr;
+      }
+      advance();
+    }
+    advance(); // '>'
+  }
+
   if (cur_.kind != Tok::LParen) {
     diag_.error(cur_.span, "E0021", "プロトタイプには '(' が必要です");
     return nullptr;
@@ -786,6 +808,7 @@ std::unique_ptr<Prototype> Parser::parsePrototype() {
   auto p = std::make_unique<Prototype>();
   p->name = std::move(name);
   p->nameSpan = nameSpan;
+  p->typeParams = std::move(typeParams);
   p->args = std::move(args);
   p->paramTypes = std::move(paramTypes);
   p->retType = retType;

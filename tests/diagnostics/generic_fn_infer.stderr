@@ -1,0 +1,6 @@
+error[E0097]: 型引数を推論できません: make の T (型注釈が必要です)
+ --> tests/diagnostics/generic_fn_infer.kal:4:1
+  |
+4 | make();
+  | ^^^^^^
+1 個のエラーで中断しました

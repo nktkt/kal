@@ -1,0 +1,6 @@
+error[E0120]: 数値型が必要です (実際 T)
+ --> tests/diagnostics/generic_fn_no_bounds.kal:3:24
+  |
+3 | fn dbl<T>(x: T) -> T = x + x;
+  |                        ^
+1 個のエラーで中断しました

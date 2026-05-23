@@ -236,6 +236,19 @@ struct Pair<A, B> { first: A, second: B }    # generic struct
 Pair { first: 3, second: 4.0 }.second;        # => 4   (Pair<i32, f64>)
 ```
 
+**Functions** can be generic too (`fn name<T, …>(…)`), monomorphized per call.
+Bodies are checked once with the type parameters abstract, so — without trait
+bounds — they are limited to type-agnostic operations, which is exactly enough
+for `Option`/`Result` helpers:
+
+```
+fn unwrap_or<T>(o: Option<T>, dflt: T) -> T =
+  match o { Some(x) => x, None => dflt };
+
+unwrap_or(checked_div(10, 2), -1);    # => 5     (unwrap_or<i64>)
+unwrap_or(Some(3.5), 0.0);            # => 3.5   (unwrap_or<f64>, same source)
+```
+
 `Option<T>` and `Result<T, E>` come built in (a prelude), so `Some`/`None` and
 `Ok`/`Err` are always available:
 
@@ -258,8 +271,8 @@ enum Result<T, E> { Ok(T), Err(E) }
 Type arguments must be supplied where they can't be inferred (e.g. a bare `None`
 needs a `: Option<i64>` annotation or a typed context). A by-value recursive type
 (e.g. `enum List<T> { Cons(T, List<T>), Nil }`) has infinite size and is rejected
-— it needs indirection (a reference/slice). Generic *functions* are not
-implemented yet (see [ROADMAP.md](ROADMAP.md)).
+— it needs indirection (a reference/slice). Trait bounds (so generic bodies can
+do more than move values around) are the next step (see [ROADMAP.md](ROADMAP.md)).
 
 ### References
 
@@ -321,7 +334,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

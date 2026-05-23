@@ -1,0 +1,6 @@
+error[E0104]: 引数の型が一致しません (期待 i64, 実際 f64)
+ --> tests/diagnostics/generic_fn_arg_mismatch.kal:3:15
+  |
+3 | printi(snd(1, 2.0));
+  |               ^^^
+1 個のエラーで中断しました

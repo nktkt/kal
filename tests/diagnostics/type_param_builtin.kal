@@ -1,0 +1,2 @@
+# A type parameter must not be named like a built-in type.
+fn weird<i64>(a: i64) -> i64 = a;

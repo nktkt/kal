@@ -1,0 +1,6 @@
+error[E0047]: 型引数名が組み込み型名と衝突しています: i64
+ --> tests/diagnostics/type_param_builtin.kal:2:4
+  |
+2 | fn weird<i64>(a: i64) -> i64 = a;
+  |    ^^^^^
+1 個のエラーで中断しました
