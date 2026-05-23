@@ -1,0 +1,6 @@
+error[E0243]: ? (Option) は戻り値型が Option の関数でのみ使えます (実際 i64)
+ --> tests/diagnostics/try_wrong_return.kal:2:31
+  |
+2 | fn f(o: Option<i64>) -> i64 = o?;
+  |                               ^^
+1 個のエラーで中断しました

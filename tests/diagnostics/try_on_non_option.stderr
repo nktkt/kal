@@ -1,0 +1,6 @@
+error[E0244]: ? は Option か Result にのみ使えます (実際 i64)
+ --> tests/diagnostics/try_on_non_option.kal:2:35
+  |
+2 | fn f() -> i64 = { let x: i64 = 5; x? };
+  |                                   ^
+1 個のエラーで中断しました

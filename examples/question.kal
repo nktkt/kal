@@ -1,0 +1,52 @@
+# 早期リターン `return` と `?` 演算子。
+#   return e;   関数からすぐ抜ける (ガード節など)
+#   e?          e が Ok/Some なら中身、Err/None なら関数から早期リターン
+
+# ガード節としての return。
+fn clamp_low(x: i64) -> i64 = {
+  if x < 0 then return 0;
+  x
+};
+
+printi(clamp_low(-5));    # => 0
+printi(clamp_low(7));     # => 7
+
+# return は値の位置 (発散する分岐) でも使える。
+fn pick(x: i64) -> i64 = {
+  let y: i64 = if x < 0 then return 0 else x;   # x<0 なら関数ごと return
+  y + 1
+};
+
+printi(pick(-3));         # => 0   (return 0)
+printi(pick(7));          # => 8   (7 + 1)
+
+fn checked_div(a: i64, b: i64) -> Option<i64> =
+  if b == 0 then None else Some(a / b);
+
+# `?`: None なら即 None を返す。Some なら中身を取り出して継続。
+fn ratio(a: i64, b: i64, c: i64) -> Option<i64> = {
+  let first: i64 = checked_div(a, b)?;    # b==0 なら None で早期リターン
+  let second: i64 = checked_div(first, c)?;
+  Some(second)
+};
+
+fn show(o: Option<i64>) -> i64 = match o { Some(x) => x, None => -1 };
+
+printi(show(ratio(100, 2, 5)));   # => 10   (100/2=50, 50/5=10)
+printi(show(ratio(100, 0, 5)));   # => -1   (最初の ? で None)
+printi(show(ratio(100, 2, 0)));   # => -1   (2 つ目の ? で None)
+
+# Result でも同様 (エラー型 E はそのまま伝播)。
+fn parse_pos(n: i64) -> Result<i64, i64> =
+  if n < 0 then Err(1) else Ok(n);
+
+fn sum_pos(a: i64, b: i64) -> Result<i64, i64> = {
+  let x: i64 = parse_pos(a)?;
+  let y: i64 = parse_pos(b)?;
+  Ok(x + y)
+};
+
+fn report(r: Result<i64, i64>) -> i64 = match r { Ok(v) => v, Err(e) => 0 - e };
+
+printi(report(sum_pos(3, 4)));    # => 7
+printi(report(sum_pos(-1, 4)));   # => -1   (Err(1) が伝播)

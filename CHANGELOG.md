@@ -5,6 +5,10 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Early return & `?`:** `return e;` (and `return;`) exits a function early; the
+  `?` operator on an `Option`/`Result` unwraps the success value or early-returns
+  the `None`/`Err` (the error type must match the function's). `if cond then e`
+  with no `else` is now allowed as a statement (so `if c then return e;` works).
 - **Traits:** `trait Name { fn m(&self, …) -> …; }` declares an interface;
   `impl Trait for Type { … }` implements it (checked for conformance). Generic
   functions can be **bounded** — `fn f<T: Trait>(x: T) …` lets the body call

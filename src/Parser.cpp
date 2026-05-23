@@ -305,14 +305,14 @@ ExprPtr Parser::parseIfExpr() {
   auto then = parseExpression();
   if (!then)
     return nullptr;
-  if (cur_.kind != Tok::Else) {
-    diag_.error(cur_.span, "E0013", "'else' が必要です");
-    return nullptr;
+  // else は省略可: 省略時は文としての if (値は unit)
+  ExprPtr els;
+  if (cur_.kind == Tok::Else) {
+    advance();
+    els = parseExpression();
+    if (!els)
+      return nullptr;
   }
-  advance();
-  auto els = parseExpression();
-  if (!els)
-    return nullptr;
   return std::make_unique<IfExpr>(s, std::move(cond), std::move(then),
                                   std::move(els));
 }
@@ -378,6 +378,19 @@ ExprPtr Parser::parsePrimary() {
     auto e = std::make_unique<VariableExpr>(cur_.span, "self");
     advance();
     return e;
+  }
+  case Tok::Return: { // 早期リターン: return [式]
+    Span s = cur_.span;
+    advance();
+    ExprPtr val;
+    if (cur_.kind != Tok::Semicolon && cur_.kind != Tok::RBrace &&
+        cur_.kind != Tok::Eof) {
+      val = parseExpression();
+      if (!val)
+        return nullptr;
+    }
+    Span full = val ? Span{s.fileId, s.start, val->span.end} : s;
+    return std::make_unique<ReturnExpr>(full, std::move(val));
   }
   case Tok::LParen:
     return parseParenExpr();
@@ -517,6 +530,11 @@ ExprPtr Parser::parseUnary() {
         return nullptr;
       Span full{e->span.fileId, e->span.start, typeSpan.end};
       e = std::make_unique<CastExpr>(full, std::move(e), t);
+    } else if (cur_.kind == Tok::Question) {
+      Span q = cur_.span;
+      advance();
+      Span full{e->span.fileId, e->span.start, q.end};
+      e = std::make_unique<TryExpr>(full, std::move(e));
     } else {
       break;
     }

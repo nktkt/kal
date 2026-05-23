@@ -1,0 +1,2 @@
+# `?` on an Option needs the function to return an Option.
+fn f(o: Option<i64>) -> i64 = o?;

@@ -1,0 +1,6 @@
+error[E0240]: return は関数本体の中でのみ使えます
+ --> tests/diagnostics/return_outside_fn.kal:2:1
+  |
+2 | return 5;
+  | ^^^^^^^^
+1 個のエラーで中断しました

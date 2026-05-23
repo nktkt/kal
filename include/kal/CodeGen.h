@@ -48,6 +48,10 @@ private:
   llvm::Value *genArrayLit(const ArrayLitExpr *e);
   llvm::Value *genIndex(const IndexExpr *e);
   llvm::Value *genMethodCall(const MethodCallExpr *e);
+  llvm::Value *genReturn(const ReturnExpr *e);
+  llvm::Value *genTry(const TryExpr *e);
+  // 現在のブロックが終端命令を持つ (return 等で発散した) か。
+  bool blockDone();
   llvm::Value *genMatch(const MatchExpr *e);
   llvm::Value *genBorrow(const BorrowExpr *e);
   llvm::Value *genDeref(const DerefExpr *e);
@@ -100,6 +104,11 @@ private:
     std::string mangled;
   };
   std::vector<PendingInstance> pendingInstances_; // 本体生成待ちの具体化
+
+  // 早期リターン (return / ?) 用。生成中の関数ごとに設定。
+  llvm::Value *currentRetSlot_ = nullptr;       // 戻り値の置き場 (unit なら null)
+  llvm::BasicBlock *currentRetBlock_ = nullptr; // 終端ブロック
+  Type currentRetTypeCG_;                        // 戻り値型 (置換済み)
 };
 
 } // namespace kal

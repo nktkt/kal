@@ -151,6 +151,10 @@ Value *CodeGen::genVariant(const kal::Type &enumType, int tag,
 }
 
 Value *CodeGen::genExpr(const Expr *e) {
+  // 既に発散 (return 等で現在ブロックが終端) していれば何も生成しない。
+  // これにより発散後の兄弟部分式が命令を吐かず、null 値の連鎖を止める。
+  if (blockDone())
+    return nullptr;
   switch (e->kind) {
   case Expr::Kind::Number:
     return genNumber(static_cast<const NumberExpr *>(e));
@@ -194,8 +198,16 @@ Value *CodeGen::genExpr(const Expr *e) {
     return builder_.getInt1(static_cast<const BoolLitExpr *>(e)->value);
   case Expr::Kind::MethodCall:
     return genMethodCall(static_cast<const MethodCallExpr *>(e));
+  case Expr::Kind::Return:
+    return genReturn(static_cast<const ReturnExpr *>(e));
+  case Expr::Kind::Try:
+    return genTry(static_cast<const TryExpr *>(e));
   }
   return nullptr;
+}
+
+bool CodeGen::blockDone() {
+  return builder_.GetInsertBlock()->getTerminator() != nullptr;
 }
 
 Value *CodeGen::genStructLit(const StructLitExpr *e) {
@@ -210,6 +222,8 @@ Value *CodeGen::genStructLit(const StructLitExpr *e) {
         fv = genExpr(e->fieldValues[j].get());
         break;
       }
+    if (blockDone())
+      return nullptr; // フィールド値が発散
     agg = builder_.CreateInsertValue(agg, fv, {static_cast<unsigned>(i)});
   }
   return agg;
@@ -222,6 +236,8 @@ Value *CodeGen::genField(const FieldExpr *e) {
     return builder_.CreateLoad(toLLVM(e->type), addr, "field");
   }
   Value *v = genExpr(e->operand.get());
+  if (blockDone())
+    return nullptr;
   return builder_.CreateExtractValue(v, {static_cast<unsigned>(e->fieldIndex)},
                                      "field");
 }
@@ -229,23 +245,31 @@ Value *CodeGen::genField(const FieldExpr *e) {
 Value *CodeGen::genTupleLit(const TupleLitExpr *e) {
   llvm::Type *tt = toLLVM(e->type);
   Value *agg = UndefValue::get(tt);
-  for (size_t i = 0; i < e->elems.size(); ++i)
-    agg = builder_.CreateInsertValue(agg, genExpr(e->elems[i].get()),
-                                     {static_cast<unsigned>(i)});
+  for (size_t i = 0; i < e->elems.size(); ++i) {
+    Value *ev = genExpr(e->elems[i].get());
+    if (blockDone())
+      return nullptr;
+    agg = builder_.CreateInsertValue(agg, ev, {static_cast<unsigned>(i)});
+  }
   return agg;
 }
 
 Value *CodeGen::genTupleIndex(const TupleIndexExpr *e) {
   Value *v = genExpr(e->operand.get());
+  if (blockDone())
+    return nullptr;
   return builder_.CreateExtractValue(v, {e->index}, "telem");
 }
 
 Value *CodeGen::genArrayLit(const ArrayLitExpr *e) {
   llvm::Type *at = toLLVM(e->type); // [N x T]
   Value *agg = UndefValue::get(at);
-  for (size_t i = 0; i < e->elems.size(); ++i)
-    agg = builder_.CreateInsertValue(agg, genExpr(e->elems[i].get()),
-                                     {static_cast<unsigned>(i)});
+  for (size_t i = 0; i < e->elems.size(); ++i) {
+    Value *ev = genExpr(e->elems[i].get());
+    if (blockDone())
+      return nullptr;
+    agg = builder_.CreateInsertValue(agg, ev, {static_cast<unsigned>(i)});
+  }
   return agg;
 }
 
@@ -259,6 +283,8 @@ Value *CodeGen::genBlock(const BlockExpr *e) {
   for (auto &st : e->stmts) {
     if (st.kind == Stmt::Kind::Let) {
       Value *v = genExpr(st.expr.get());
+      if (blockDone())
+        break; // init が発散 → 以降は到達不能
       AllocaInst *slot = entryAlloca(toLLVM(st.expr->type), st.name);
       builder_.CreateStore(v, slot);
       saved.push_back({st.name, namedValues_.count(st.name)
@@ -267,9 +293,12 @@ Value *CodeGen::genBlock(const BlockExpr *e) {
       namedValues_[st.name] = slot;
     } else {
       genExpr(st.expr.get()); // 式文: 値は捨てる
+      if (blockDone())
+        break; // 文が発散 → 以降は到達不能
     }
   }
-  Value *result = e->tail ? genExpr(e->tail.get()) : nullptr;
+  Value *result =
+      (!blockDone() && e->tail) ? genExpr(e->tail.get()) : nullptr;
   // スコープ復元 (逆順)
   for (size_t i = saved.size(); i-- > 0;) {
     if (saved[i].second)
@@ -283,6 +312,8 @@ Value *CodeGen::genBlock(const BlockExpr *e) {
 Value *CodeGen::genAssign(const AssignExpr *e) {
   Value *addr = genAddr(e->target.get());
   Value *v = genExpr(e->value.get());
+  if (blockDone())
+    return nullptr; // 対象/値の評価が発散
   builder_.CreateStore(v, addr);
   return nullptr; // 代入式は unit
 }
@@ -293,9 +324,13 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
   Value *slot;
   if (e->scrutinee->type.isRef()) {
     slot = genExpr(e->scrutinee.get()); // enum へのポインタ
+    if (blockDone())
+      return nullptr; // 対象式が発散
     et = getEnumType(e->scrutinee->type.pointee());
   } else {
     Value *scrut = genExpr(e->scrutinee.get());
+    if (blockDone())
+      return nullptr; // 対象式が発散
     et = cast<StructType>(scrut->getType());
     AllocaInst *a = builder_.CreateAlloca(et);
     a->setAlignment(Align(8));
@@ -335,6 +370,7 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
 
   bool isUnit = !e->type.isKnown() || e->type.isUnit();
   std::vector<std::pair<Value *, BasicBlock *>> incoming;
+  bool anyLive = false; // 末尾まで到達する (発散しない) アームがあるか
 
   for (size_t a = 0; a < e->arms.size(); ++a) {
     const MatchArm &arm = e->arms[a];
@@ -374,10 +410,14 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
         namedValues_.erase(boundNames[i]);
     }
 
+    bool term = blockDone(); // アーム本体が発散したか
     BasicBlock *endBB = builder_.GetInsertBlock();
-    builder_.CreateBr(mergeBB);
-    if (!isUnit)
-      incoming.push_back({bv, endBB});
+    if (!term) {
+      builder_.CreateBr(mergeBB);
+      anyLive = true;
+      if (!isUnit)
+        incoming.push_back({bv, endBB});
+    }
   }
 
   if (unreachBB) {
@@ -387,6 +427,10 @@ Value *CodeGen::genMatch(const MatchExpr *e) {
 
   fn->insert(fn->end(), mergeBB);
   builder_.SetInsertPoint(mergeBB);
+  if (!anyLive) {
+    builder_.CreateUnreachable(); // 全アームが発散 → merge は到達不能
+    return nullptr;
+  }
   if (isUnit)
     return nullptr;
   PHINode *phi =
@@ -496,6 +540,8 @@ Value *CodeGen::genAddr(const Expr *e) {
   }
   // 一時値: メモリに退避
   Value *v = genExpr(e);
+  if (blockDone())
+    return nullptr; // 一時値の評価が発散
   AllocaInst *slot = entryAlloca(toLLVM(e->type), "tmp");
   builder_.CreateStore(v, slot);
   return slot;
@@ -519,6 +565,8 @@ Value *CodeGen::genBorrow(const BorrowExpr *e) {
 
 Value *CodeGen::genDeref(const DerefExpr *e) {
   Value *ptr = genExpr(e->operand.get());
+  if (blockDone())
+    return nullptr;
   return builder_.CreateLoad(toLLVM(e->type), ptr, "deref");
 }
 
@@ -527,6 +575,8 @@ Value *CodeGen::genBinary(const BinaryExpr *e) {
   if (e->op == Tok::AmpAmp || e->op == Tok::PipePipe) {
     bool isAnd = e->op == Tok::AmpAmp;
     Value *l = genExpr(e->lhs.get()); // i1
+    if (blockDone())
+      return nullptr; // lhs が発散
     Function *fn = builder_.GetInsertBlock()->getParent();
     BasicBlock *rhsBB = BasicBlock::Create(ctx_, "scrhs", fn);
     BasicBlock *contBB = BasicBlock::Create(ctx_, "sccont", fn);
@@ -538,18 +588,23 @@ Value *CodeGen::genBinary(const BinaryExpr *e) {
       builder_.CreateCondBr(l, contBB, rhsBB);
     builder_.SetInsertPoint(rhsBB);
     Value *r = genExpr(e->rhs.get());
+    bool rTerm = blockDone(); // rhs が発散したか
     BasicBlock *rEnd = builder_.GetInsertBlock();
-    builder_.CreateBr(contBB);
+    if (!rTerm)
+      builder_.CreateBr(contBB);
     builder_.SetInsertPoint(contBB);
     PHINode *phi = builder_.CreatePHI(llvm::Type::getInt1Ty(ctx_), 2, "sctmp");
     // l からの到達時の値: && なら false、|| なら true
     phi->addIncoming(builder_.getInt1(!isAnd), lBB);
-    phi->addIncoming(r, rEnd);
+    if (!rTerm)
+      phi->addIncoming(r, rEnd);
     return phi;
   }
 
   Value *l = genExpr(e->lhs.get());
   Value *r = genExpr(e->rhs.get());
+  if (blockDone())
+    return nullptr; // 被演算子が発散
   const kal::Type &ot = e->lhs->type; // 両辺は同じ型 (Sema 保証)
   bool isF = ot.isFloat();
   bool sgn = ot.isInt() ? ot.isSigned : true;
@@ -607,6 +662,8 @@ Value *CodeGen::genBinary(const BinaryExpr *e) {
 
 Value *CodeGen::genUnary(const UnaryExpr *e) {
   Value *v = genExpr(e->operand.get());
+  if (blockDone())
+    return nullptr; // 被演算子が発散
   if (e->op == Tok::Bang)
     return builder_.CreateNot(v, "nottmp"); // bool (i1) 反転
   // 単項マイナス
@@ -618,6 +675,8 @@ Value *CodeGen::genCall(const CallExpr *e) {
   std::vector<Value *> args;
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
+  if (blockDone())
+    return nullptr; // 引数の評価が発散
   if (e->variantTag >= 0) // enum バリアント構築
     return genVariant(e->type, e->variantTag, args);
   // 組み込み len(s): スライス {ptr, len} の len フィールドを取り出す
@@ -666,6 +725,8 @@ Value *CodeGen::genMethodCall(const MethodCallExpr *e) {
   args.push_back(selfArg);
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
+  if (blockDone())
+    return nullptr; // レシーバ/引数の評価が発散
   Function *callee = ensureInstance(def, targs);
   CallInst *call = builder_.CreateCall(callee, args);
   kal::Type rt = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
@@ -675,8 +736,72 @@ Value *CodeGen::genMethodCall(const MethodCallExpr *e) {
   return call;
 }
 
+Value *CodeGen::genReturn(const ReturnExpr *e) {
+  if (e->value) {
+    Value *v = genExpr(e->value.get());
+    if (blockDone())
+      return nullptr; // 値の評価自体が発散した
+    if (currentRetSlot_ && v)
+      builder_.CreateStore(v, currentRetSlot_);
+  }
+  // ブロックを終端する (afterret は作らない → blockDone() が正しく true を返す)
+  builder_.CreateBr(currentRetBlock_);
+  return nullptr;
+}
+
+// `e?`: prelude の Option/Result はタグ 0=成功(Some/Ok)・1=失敗(None/Err)。
+// 成功なら中身を取り出して継続、失敗なら関数から早期リターンする。
+Value *CodeGen::genTry(const TryExpr *e) {
+  Value *v = genExpr(e->operand.get());
+  kal::Type ot = typeSubst_.empty()
+                     ? e->operand->type
+                     : substType(e->operand->type, typeSubst_);
+  StructType *et = getEnumType(ot);
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+
+  AllocaInst *slot = builder_.CreateAlloca(et);
+  slot->setAlignment(Align(8));
+  builder_.CreateStore(v, slot);
+  Value *tag = builder_.CreateLoad(
+      i64, builder_.CreateStructGEP(et, slot, 0, "tagptr"), "tag");
+
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock *okBB = BasicBlock::Create(ctx_, "try.ok", fn);
+  BasicBlock *errBB = BasicBlock::Create(ctx_, "try.err", fn);
+  Value *isOk = builder_.CreateICmpEQ(tag, ConstantInt::get(i64, 0), "isok");
+  builder_.CreateCondBr(isOk, okBB, errBB);
+
+  // 失敗パス: None / Err(payload) を作って早期リターン
+  builder_.SetInsertPoint(errBB);
+  if (e->kind == 0) { // Option → None
+    Value *none = genVariant(currentRetTypeCG_, 1, {});
+    if (currentRetSlot_)
+      builder_.CreateStore(none, currentRetSlot_);
+  } else { // Result → Err(e)
+    llvm::Type *eTy = toLLVM(ot.elems[1]);
+    StructType *vs = StructType::get(ctx_, ArrayRef<llvm::Type *>{eTy});
+    Value *pv = builder_.CreateLoad(
+        vs, builder_.CreateStructGEP(et, slot, 1, "errptr"), "errld");
+    Value *errVal = builder_.CreateExtractValue(pv, {0u});
+    Value *errEnum = genVariant(currentRetTypeCG_, 1, {errVal});
+    if (currentRetSlot_)
+      builder_.CreateStore(errEnum, currentRetSlot_);
+  }
+  builder_.CreateBr(currentRetBlock_);
+
+  // 成功パス: 中身を取り出して `?` 式の値とする
+  builder_.SetInsertPoint(okBB);
+  llvm::Type *innerTy = toLLVM(ot.elems[0]);
+  StructType *okVs = StructType::get(ctx_, ArrayRef<llvm::Type *>{innerTy});
+  Value *pv = builder_.CreateLoad(
+      okVs, builder_.CreateStructGEP(et, slot, 1, "okptr"), "okld");
+  return builder_.CreateExtractValue(pv, {0u}, "tryval");
+}
+
 Value *CodeGen::genCast(const CastExpr *e) {
   Value *v = genExpr(e->operand.get());
+  if (blockDone())
+    return nullptr;
   const kal::Type &src = e->operand->type;
   const kal::Type &dst = e->targetType;
   if (src == dst)
@@ -704,8 +829,24 @@ Value *CodeGen::genCast(const CastExpr *e) {
 
 Value *CodeGen::genIf(const IfExpr *e) {
   Value *condV = genExpr(e->cond.get()); // 既に i1 (bool)
-
+  if (blockDone())
+    return nullptr; // 条件式が発散
   Function *fn = builder_.GetInsertBlock()->getParent();
+
+  // else 省略 = 文としての if (値は unit)
+  if (!e->els) {
+    BasicBlock *thenBB = BasicBlock::Create(ctx_, "then", fn);
+    BasicBlock *mergeBB = BasicBlock::Create(ctx_, "ifcont");
+    builder_.CreateCondBr(condV, thenBB, mergeBB);
+    builder_.SetInsertPoint(thenBB);
+    genExpr(e->then.get());
+    if (!blockDone())
+      builder_.CreateBr(mergeBB);
+    fn->insert(fn->end(), mergeBB);
+    builder_.SetInsertPoint(mergeBB);
+    return nullptr;
+  }
+
   BasicBlock *thenBB = BasicBlock::Create(ctx_, "then", fn);
   BasicBlock *elseBB = BasicBlock::Create(ctx_, "else");
   BasicBlock *mergeBB = BasicBlock::Create(ctx_, "ifcont");
@@ -714,30 +855,43 @@ Value *CodeGen::genIf(const IfExpr *e) {
 
   builder_.SetInsertPoint(thenBB);
   Value *thenV = genExpr(e->then.get());
-  builder_.CreateBr(mergeBB);
+  bool thenTerm = blockDone(); // then 分岐が発散したか
+  if (!thenTerm)
+    builder_.CreateBr(mergeBB);
   thenBB = builder_.GetInsertBlock();
 
   fn->insert(fn->end(), elseBB);
   builder_.SetInsertPoint(elseBB);
   Value *elseV = genExpr(e->els.get());
-  builder_.CreateBr(mergeBB);
+  bool elseTerm = blockDone();
+  if (!elseTerm)
+    builder_.CreateBr(mergeBB);
   elseBB = builder_.GetInsertBlock();
 
   fn->insert(fn->end(), mergeBB);
   builder_.SetInsertPoint(mergeBB);
 
-  if (e->type.isUnit())
-    return nullptr; // 両分岐 unit: 値なし
+  if (thenTerm && elseTerm) {
+    builder_.CreateUnreachable(); // 両分岐とも発散 → merge は到達不能
+    return nullptr;
+  }
+  // unit、または片方が発散して型が未知なら値なし
+  if (e->type.isUnit() || !e->type.isKnown())
+    return nullptr;
 
   PHINode *phi = builder_.CreatePHI(toLLVM(e->type), 2, "iftmp");
-  phi->addIncoming(thenV, thenBB);
-  phi->addIncoming(elseV, elseBB);
+  if (!thenTerm)
+    phi->addIncoming(thenV, thenBB);
+  if (!elseTerm)
+    phi->addIncoming(elseV, elseBB);
   return phi;
 }
 
 Value *CodeGen::genFor(const ForExpr *e) {
   const kal::Type &vt = e->start->type; // ループ変数の型
   Value *startV = genExpr(e->start.get());
+  if (blockDone())
+    return nullptr; // 開始値が発散
 
   // ループ変数はメモリ常駐 (アドレスを取れる)
   AllocaInst *slot = entryAlloca(toLLVM(vt), e->var);
@@ -759,19 +913,22 @@ Value *CodeGen::genFor(const ForExpr *e) {
   builder_.SetInsertPoint(bodyBB);
   genExpr(e->body.get()); // 値は捨てる
 
-  Value *stepV;
-  if (e->step)
-    stepV = genExpr(e->step.get());
-  else if (vt.isFloat())
-    stepV = ConstantFP::get(toLLVM(vt), 1.0);
-  else
-    stepV = ConstantInt::get(toLLVM(vt), 1, vt.isSigned);
+  // 本体が発散 (return) していなければ、加算してループ先頭へ戻る
+  if (!blockDone()) {
+    Value *stepV;
+    if (e->step)
+      stepV = genExpr(e->step.get());
+    else if (vt.isFloat())
+      stepV = ConstantFP::get(toLLVM(vt), 1.0);
+    else
+      stepV = ConstantInt::get(toLLVM(vt), 1, vt.isSigned);
 
-  Value *cur = builder_.CreateLoad(toLLVM(vt), slot, e->var);
-  Value *nextVar = vt.isFloat() ? builder_.CreateFAdd(cur, stepV, "nextvar")
-                                : builder_.CreateAdd(cur, stepV, "nextvar");
-  builder_.CreateStore(nextVar, slot);
-  builder_.CreateBr(condBB);
+    Value *cur = builder_.CreateLoad(toLLVM(vt), slot, e->var);
+    Value *nextVar = vt.isFloat() ? builder_.CreateFAdd(cur, stepV, "nextvar")
+                                  : builder_.CreateAdd(cur, stepV, "nextvar");
+    builder_.CreateStore(nextVar, slot);
+    builder_.CreateBr(condBB);
+  }
 
   builder_.SetInsertPoint(afterBB);
 
@@ -819,13 +976,31 @@ bool CodeGen::genFunctionInto(const FunctionDef &f, llvm::Function *fn,
     namedValues_[std::string(arg.getName())] = slot;
   }
 
+  // 早期リターン用: 戻り値の置き場と終端ブロックを用意する。
+  currentRetTypeCG_ = retType;
+  llvm::Type *retLLVM = retType.isUnit() ? nullptr : toLLVM(retType);
+  currentRetSlot_ = retLLVM ? entryAlloca(retLLVM, "retval") : nullptr;
+  currentRetBlock_ = BasicBlock::Create(ctx_, "return"); // 後で末尾に挿入
+
   Value *ret = genExpr(f.body.get());
-  if (retType.isUnit())
-    builder_.CreateRetVoid();
+  // 本体が末尾まで到達した (発散していない) なら戻り値を格納して終端へ
+  if (!blockDone()) {
+    if (currentRetSlot_ && ret)
+      builder_.CreateStore(ret, currentRetSlot_);
+    builder_.CreateBr(currentRetBlock_);
+  }
+
+  fn->insert(fn->end(), currentRetBlock_);
+  builder_.SetInsertPoint(currentRetBlock_);
+  if (retLLVM)
+    builder_.CreateRet(builder_.CreateLoad(retLLVM, currentRetSlot_, "ret"));
   else
-    builder_.CreateRet(ret);
+    builder_.CreateRetVoid();
+
   verifyFunction(*fn);
   typeSubst_.clear();
+  currentRetSlot_ = nullptr;
+  currentRetBlock_ = nullptr;
   return true;
 }
 

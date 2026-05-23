@@ -36,6 +36,8 @@ struct Expr {
     Index,
     BoolLit,
     MethodCall,
+    Return,
+    Try,
   };
   Kind kind;
   Span span;
@@ -188,6 +190,22 @@ struct IndexExpr : Expr {
   ExprPtr index;
   IndexExpr(Span s, ExprPtr base, ExprPtr index)
       : Expr(Kind::Index, s), base(std::move(base)), index(std::move(index)) {}
+};
+
+/// 早期リターン: `return value` または `return` (値なし=unit)。型は発散。
+struct ReturnExpr : Expr {
+  ExprPtr value; // null なら unit を返す
+  ReturnExpr(Span s, ExprPtr value)
+      : Expr(Kind::Return, s), value(std::move(value)) {}
+};
+
+/// `?` 演算子: `operand?`。operand が Ok/Some なら中身、Err/None なら早期リターン。
+struct TryExpr : Expr {
+  ExprPtr operand;
+  // Sema が解決: 0=Option, 1=Result
+  int kind = 0;
+  TryExpr(Span s, ExprPtr operand)
+      : Expr(Kind::Try, s), operand(std::move(operand)) {}
 };
 
 /// メソッド呼び出し: `receiver.method(args)`

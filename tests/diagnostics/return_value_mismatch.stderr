@@ -1,0 +1,6 @@
+error[E0241]: return の型が戻り値型と一致しません (期待 i64, 実際 f64)
+ --> tests/diagnostics/return_value_mismatch.kal:2:24
+  |
+2 | fn f() -> i64 = return 1.5;
+  |                        ^^^
+1 個のエラーで中断しました

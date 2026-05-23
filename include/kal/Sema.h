@@ -56,6 +56,8 @@ private:
   Type checkArrayLit(ArrayLitExpr *e, std::optional<Type> expected);
   Type checkIndex(IndexExpr *e);
   Type checkMethodCall(MethodCallExpr *e);
+  Type checkReturn(ReturnExpr *e);
+  Type checkTry(TryExpr *e);
   // 代入先 / &mut で借用できる「可変な場所」か
   bool isMutablePlace(const Expr *e);
 
@@ -91,6 +93,7 @@ private:
   std::map<std::string, const TraitDef *> traits_; // トレイト名 → 定義
   std::set<std::pair<std::string, std::string>> traitImpls_; // (トレイト, 型)
   std::set<std::string> activeTypeParams_; // 検査中の関数の型引数 (resolve 用)
+  std::optional<Type> currentRetType_;     // 検査中の関数の戻り値型 (return/? 用)
   // 検査中の関数の型引数の境界: 型引数名 → トレイト名の集合
   std::map<std::string, std::vector<std::string>> paramBounds_;
 };

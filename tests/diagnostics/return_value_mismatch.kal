@@ -1,0 +1,2 @@
+# A `return` value must match the function's return type.
+fn f() -> i64 = return 1.5;

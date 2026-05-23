@@ -82,6 +82,8 @@ Token Lexer::next() {
       k = Tok::Impl;
     else if (s == "trait")
       k = Tok::Trait;
+    else if (s == "return")
+      k = Tok::Return;
     else if (s == "self")
       k = Tok::SelfKw;
     t.text = s.str();
@@ -194,6 +196,8 @@ Token Lexer::next() {
     return make(Tok::LBracket);
   case ']':
     return make(Tok::RBracket);
+  case '?':
+    return make(Tok::Question);
   case ',':
     return make(Tok::Comma);
   case ';':

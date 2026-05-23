@@ -111,6 +111,7 @@ sin(0.0);                                # => 0
 
 ```
 if cond then expr1 else expr2    # cond は bool 型。両分岐は同じ型である必要がある
+if cond then expr                # else は省略可 — 文として扱われ値は ()
 ```
 
 ### for ループ（前判定・値は unit）
@@ -261,6 +262,21 @@ enum Result<T, E> { Ok(T), Err(E) }
 無限サイズになるため拒否されます――参照・スライスによる間接化が必要です。次の一歩は
 トレイト境界（本体で値の受け渡し以上のことができるようになる）です（[ROADMAP.md](ROADMAP.md)）。
 
+### 早期リターンと `?` 演算子
+
+`return e;`（または `return;`）で関数から早期に抜けられます――ガード節
+（`if c then return x;`）に便利です。`?` 演算子はエラーを伝播します: `e?` は
+`Option`/`Result` の成功時の中身を値とし、`None`/`Err` のときは関数から
+早期リターンします（関数の戻り値型が対応する `Option`/`Result` である必要があります）。
+
+```
+fn ratio(a: i64, b: i64, c: i64) -> Option<i64> = {
+  let first: i64  = checked_div(a, b)?;   # b == 0 ならここで None を返す
+  let second: i64 = checked_div(first, c)?;
+  Some(second)
+};
+```
+
 ### メソッド（impl ブロック）
 
 `impl Type { … }` で型にメソッドを結びつけ、`recv.method(args)` で呼びます。
@@ -362,7 +378,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait, question
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

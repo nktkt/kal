@@ -77,6 +77,38 @@ bool Sema::hasParam(const Type &t) {
   return false;
 }
 
+// 式が「必ず発散する」(return 等で先へ進まない) か。末尾 return 文の判定用。
+static bool definitelyDiverges(const Expr *e) {
+  switch (e->kind) {
+  case Expr::Kind::Return:
+    return true;
+  case Expr::Kind::Block: {
+    auto *b = static_cast<const BlockExpr *>(e);
+    if (b->tail)
+      return definitelyDiverges(b->tail.get());
+    return !b->stmts.empty() &&
+           b->stmts.back().kind == Stmt::Kind::Expr &&
+           definitelyDiverges(b->stmts.back().expr.get());
+  }
+  case Expr::Kind::If: {
+    auto *i = static_cast<const IfExpr *>(e);
+    return i->els && definitelyDiverges(i->then.get()) &&
+           definitelyDiverges(i->els.get());
+  }
+  case Expr::Kind::Match: {
+    auto *m = static_cast<const MatchExpr *>(e);
+    if (m->arms.empty())
+      return false;
+    for (auto &arm : m->arms)
+      if (!definitelyDiverges(arm.body.get()))
+        return false;
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
 bool Sema::hasNonActiveParam(const Type &t) const {
   if (t.isParam())
     return activeTypeParams_.count(t.name) == 0; // 検査中の型引数でなければ推論変数
@@ -451,6 +483,7 @@ void Sema::checkFunction(FunctionDef &f) {
   paramBounds_.clear();
   for (auto &b : f.proto->bounds)
     paramBounds_[b.first].push_back(b.second); // 型引数の境界トレイト
+  currentRetType_ = f.proto->retType;          // return / ? の検証用
   for (size_t i = 0; i < f.proto->args.size(); ++i)
     locals_[f.proto->args[i]] = {f.proto->paramTypes[i], /*isMut=*/false};
 
@@ -462,6 +495,7 @@ void Sema::checkFunction(FunctionDef &f) {
   }
   activeTypeParams_.clear();
   paramBounds_.clear();
+  currentRetType_.reset();
 }
 
 Type Sema::check(Expr *e, std::optional<Type> expected) {
@@ -529,6 +563,12 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     break;
   case Expr::Kind::MethodCall:
     t = checkMethodCall(static_cast<MethodCallExpr *>(e));
+    break;
+  case Expr::Kind::Return:
+    t = checkReturn(static_cast<ReturnExpr *>(e));
+    break;
+  case Expr::Kind::Try:
+    t = checkTry(static_cast<TryExpr *>(e));
     break;
   }
   e->type = t;
@@ -834,6 +874,12 @@ Type Sema::checkIf(IfExpr *e, std::optional<Type> expected) {
     diag_.error(e->cond->span, "E0130",
                 "if の条件は bool 型である必要があります (実際 " + ct.str() + ")");
 
+  // else 省略 = 文としての if。then の値は捨て、全体は unit。
+  if (!e->els) {
+    check(e->then.get(), std::nullopt);
+    return Type::unit();
+  }
+
   Type tt = check(e->then.get(), expected);
   std::optional<Type> elseHint =
       tt.isKnown() ? std::optional<Type>(tt) : expected;
@@ -1115,7 +1161,14 @@ Type Sema::checkBlock(BlockExpr *e, std::optional<Type> expected) {
     }
   }
 
-  Type result = e->tail ? check(e->tail.get(), expected) : Type::unit();
+  Type result;
+  if (e->tail)
+    result = check(e->tail.get(), expected);
+  else if (!e->stmts.empty() && e->stmts.back().kind == Stmt::Kind::Expr &&
+           definitelyDiverges(e->stmts.back().expr.get()))
+    result = Type::unknown(); // 末尾の文が発散 → ブロック全体も発散扱い
+  else
+    result = Type::unit();
 
   // スコープ復元 (逆順)
   for (size_t i = introduced.size(); i-- > 0;) {
@@ -1181,6 +1234,56 @@ Type Sema::checkIndex(IndexExpr *e) {
     return Type::unknown();
   }
   return bt.elemType();
+}
+
+Type Sema::checkReturn(ReturnExpr *e) {
+  if (!currentRetType_) {
+    diag_.error(e->span, "E0240", "return は関数本体の中でのみ使えます");
+    if (e->value)
+      check(e->value.get(), std::nullopt);
+    return Type::unknown();
+  }
+  Type rt = *currentRetType_;
+  if (e->value) {
+    Type vt = check(e->value.get(), rt);
+    if (vt.isKnown() && vt != rt)
+      diag_.error(e->value->span, "E0241",
+                  "return の型が戻り値型と一致しません (期待 " + rt.str() +
+                      ", 実際 " + vt.str() + ")");
+  } else if (!rt.isUnit()) {
+    diag_.error(e->span, "E0241",
+                "値のない return ですが戻り値型は " + rt.str() + " です");
+  }
+  return Type::unknown(); // 発散する
+}
+
+Type Sema::checkTry(TryExpr *e) {
+  Type ot = check(e->operand.get(), std::nullopt);
+  if (!currentRetType_) {
+    diag_.error(e->span, "E0242", "? は関数本体の中でのみ使えます");
+    return Type::unknown();
+  }
+  Type rt = *currentRetType_;
+  if (ot.isEnum() && ot.name == "Option" && ot.elems.size() == 1) {
+    e->kind = 0;
+    if (!(rt.isEnum() && rt.name == "Option"))
+      diag_.error(e->span, "E0243",
+                  "? (Option) は戻り値型が Option の関数でのみ使えます (実際 " +
+                      rt.str() + ")");
+    return ot.elems[0];
+  }
+  if (ot.isEnum() && ot.name == "Result" && ot.elems.size() == 2) {
+    e->kind = 1;
+    if (!(rt.isEnum() && rt.name == "Result" && rt.elems.size() == 2 &&
+          rt.elems[1] == ot.elems[1]))
+      diag_.error(e->span, "E0243",
+                  "? (Result) は同じエラー型 E を返す Result 関数でのみ使えます");
+    return ot.elems[0];
+  }
+  if (ot.isKnown())
+    diag_.error(e->operand->span, "E0244",
+                "? は Option か Result にのみ使えます (実際 " + ot.str() + ")");
+  return Type::unknown();
 }
 
 Type Sema::checkMethodCall(MethodCallExpr *e) {

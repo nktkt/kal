@@ -121,6 +121,7 @@ Omitting `-> T` makes the return type `()` (unit).
 
 ```
 if cond then expr1 else expr2    # cond must be bool; both branches share one type
+if cond then expr                # `else` may be omitted — a statement (value is ())
 ```
 
 ### for loop (pre-tested, evaluates to unit)
@@ -276,6 +277,21 @@ needs a `: Option<i64>` annotation or a typed context). A by-value recursive typ
 — it needs indirection (a reference/slice). Trait bounds (so generic bodies can
 do more than move values around) are the next step (see [ROADMAP.md](ROADMAP.md)).
 
+### Early return & the `?` operator
+
+`return e;` (or `return;`) exits the function early — handy for guard clauses
+(`if c then return x;`). The `?` operator propagates errors: `e?` on an
+`Option`/`Result` evaluates to the success payload, or early-returns the
+`None`/`Err` (so the function's return type must be a matching `Option`/`Result`).
+
+```
+fn ratio(a: i64, b: i64, c: i64) -> Option<i64> = {
+  let first: i64  = checked_div(a, b)?;   # returns None here if b == 0
+  let second: i64 = checked_div(first, c)?;
+  Some(second)
+};
+```
+
 ### Methods (`impl` blocks)
 
 `impl Type { … }` attaches methods to a type, called with `recv.method(args)`.
@@ -382,7 +398,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait, question
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

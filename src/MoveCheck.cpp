@@ -99,6 +99,15 @@ void MoveCheck::use(const Expr *e) {
       use(a.get());
     return;
   }
+  case Expr::Kind::Return: {
+    auto *r = static_cast<const ReturnExpr *>(e);
+    if (r->value)
+      use(r->value.get());
+    return;
+  }
+  case Expr::Kind::Try:
+    use(static_cast<const TryExpr *>(e)->operand.get()); // operand を消費
+    return;
   case Expr::Kind::Call: {
     auto *c = static_cast<const CallExpr *>(e);
     if (c->isLenBuiltin) {
@@ -178,6 +187,10 @@ void MoveCheck::use(const Expr *e) {
   case Expr::Kind::If: {
     auto *i = static_cast<const IfExpr *>(e);
     use(i->cond.get());
+    if (!i->els) { // 文としての if: then の (条件付き) ムーブのみ
+      use(i->then.get());
+      return;
+    }
     auto saved = moved_;
     use(i->then.get());
     auto afterThen = moved_;

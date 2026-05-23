@@ -26,6 +26,7 @@ enum class Tok {
   False,
   Impl,
   Trait,
+  Return,
   SelfKw, // self
   // 主要トークン
   Identifier,
@@ -57,6 +58,7 @@ enum class Tok {
   RBrace,   // }
   LBracket, // [
   RBracket, // ]
+  Question, // ?
   Comma,
   Semicolon,
   Unknown,
