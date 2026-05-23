@@ -374,6 +374,11 @@ ExprPtr Parser::parsePrimary() {
     advance();
     return e;
   }
+  case Tok::SelfKw: { // メソッド本体での self は変数参照
+    auto e = std::make_unique<VariableExpr>(cur_.span, "self");
+    advance();
+    return e;
+  }
   case Tok::LParen:
     return parseParenExpr();
   case Tok::If:
@@ -440,9 +445,43 @@ ExprPtr Parser::parseUnary() {
         Span fspan = cur_.span;
         std::string fname = cur_.text;
         advance();
-        Span full{e->span.fileId, e->span.start, fspan.end};
-        e = std::make_unique<FieldExpr>(full, std::move(e), std::move(fname),
-                                        fspan);
+        if (cur_.kind == Tok::LParen) {
+          // メソッド呼び出し: recv.method(args)
+          advance();
+          bool savedNSL = noStructLit_;
+          noStructLit_ = false;
+          std::vector<ExprPtr> args;
+          if (cur_.kind != Tok::RParen) {
+            for (;;) {
+              auto a = parseExpression();
+              if (!a) {
+                noStructLit_ = savedNSL;
+                return nullptr;
+              }
+              args.push_back(std::move(a));
+              if (cur_.kind == Tok::RParen)
+                break;
+              if (cur_.kind != Tok::Comma) {
+                diag_.error(cur_.span, "E0011",
+                            "引数リストには ',' か ')' が必要です");
+                noStructLit_ = savedNSL;
+                return nullptr;
+              }
+              advance();
+            }
+          }
+          Span end = cur_.span;
+          advance(); // ')'
+          noStructLit_ = savedNSL;
+          Span full{e->span.fileId, e->span.start, end.end};
+          e = std::make_unique<MethodCallExpr>(full, std::move(e),
+                                               std::move(fname), fspan,
+                                               std::move(args));
+        } else {
+          Span full{e->span.fileId, e->span.start, fspan.end};
+          e = std::make_unique<FieldExpr>(full, std::move(e), std::move(fname),
+                                          fspan);
+        }
       } else if (cur_.kind == Tok::Number && !cur_.isFloat) {
         Span ispan = cur_.span;
         unsigned idx = static_cast<unsigned>(cur_.intValue);
@@ -1004,6 +1043,178 @@ std::unique_ptr<EnumDef> Parser::parseEnumDef() {
   return ed;
 }
 
+// impl ブロック: `impl Name<P, ...> { fn m(self, ...) -> T = e; ... }`
+std::unique_ptr<ImplBlock> Parser::parseImplBlock() {
+  Span start = cur_.span;
+  advance(); // 'impl'
+  if (cur_.kind != Tok::Identifier) {
+    diag_.error(cur_.span, "E0200", "impl には型名が必要です");
+    return nullptr;
+  }
+  auto ib = std::make_unique<ImplBlock>();
+  ib->typeName = cur_.text;
+  ib->typeSpan = cur_.span;
+  advance();
+
+  // 型引数 <P, ...>
+  if (cur_.kind == Tok::Less) {
+    advance();
+    for (;;) {
+      if (cur_.kind != Tok::Identifier) {
+        diag_.error(cur_.span, "E0087", "型引数名が必要です");
+        return nullptr;
+      }
+      ib->typeParams.push_back(cur_.text);
+      advance();
+      if (cur_.kind == Tok::Greater)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0088", "型引数には ',' か '>' が必要です");
+        return nullptr;
+      }
+      advance();
+    }
+    advance(); // '>'
+  }
+
+  if (cur_.kind != Tok::LBrace) {
+    diag_.error(cur_.span, "E0201", "impl には '{' が必要です");
+    return nullptr;
+  }
+  advance();
+
+  // self の基底型 (型引数を持つ場合あり)。Param 化は Sema が行う。
+  Type selfBase = Type::structTy(ib->typeName);
+  for (auto &p : ib->typeParams)
+    selfBase.elems.push_back(Type::structTy(p));
+
+  while (cur_.kind != Tok::RBrace && cur_.kind != Tok::Eof) {
+    if (cur_.kind != Tok::Fn) {
+      diag_.error(cur_.span, "E0202", "impl の中にはメソッド (fn) が必要です");
+      return nullptr;
+    }
+    advance(); // 'fn'
+    if (cur_.kind != Tok::Identifier) {
+      diag_.error(cur_.span, "E0020", "メソッド名が必要です");
+      return nullptr;
+    }
+    Span nameSpan = cur_.span;
+    std::string mname = cur_.text;
+    advance();
+    if (cur_.kind != Tok::LParen) {
+      diag_.error(cur_.span, "E0021", "メソッドには '(' が必要です");
+      return nullptr;
+    }
+    advance();
+
+    // レシーバ: self / &self / &mut self
+    int selfKind = 0;
+    if (cur_.kind == Tok::SelfKw) {
+      advance();
+    } else if (cur_.kind == Tok::Amp) {
+      advance();
+      if (cur_.kind == Tok::Mut) {
+        selfKind = 2;
+        advance();
+      } else {
+        selfKind = 1;
+      }
+      if (cur_.kind != Tok::SelfKw) {
+        diag_.error(cur_.span, "E0203", "メソッドの第一引数は self が必要です");
+        return nullptr;
+      }
+      advance();
+    } else {
+      diag_.error(cur_.span, "E0203", "メソッドの第一引数は self が必要です");
+      return nullptr;
+    }
+    Type selfType = selfKind == 0   ? selfBase
+                    : selfKind == 1 ? Type::refTy(selfBase, false)
+                                    : Type::refTy(selfBase, true);
+
+    std::vector<std::string> args = {"self"};
+    std::vector<Type> paramTypes = {selfType};
+    if (cur_.kind == Tok::Comma) {
+      advance();
+      for (;;) {
+        if (cur_.kind != Tok::Identifier) {
+          diag_.error(cur_.span, "E0023", "引数名が必要です");
+          return nullptr;
+        }
+        std::string pn = cur_.text;
+        advance();
+        if (cur_.kind != Tok::Colon) {
+          diag_.error(cur_.span, "E0024", "引数には ': 型' の注釈が必要です");
+          return nullptr;
+        }
+        advance();
+        Type pt;
+        if (!parseType(pt))
+          return nullptr;
+        args.push_back(std::move(pn));
+        paramTypes.push_back(pt);
+        if (cur_.kind == Tok::RParen)
+          break;
+        if (cur_.kind != Tok::Comma) {
+          diag_.error(cur_.span, "E0025", "引数リストには ',' か ')' が必要です");
+          return nullptr;
+        }
+        advance();
+      }
+    }
+    if (cur_.kind != Tok::RParen) {
+      diag_.error(cur_.span, "E0025", "引数リストには ',' か ')' が必要です");
+      return nullptr;
+    }
+    Span protoEnd = cur_.span;
+    advance(); // ')'
+
+    Type retType = Type::unit();
+    if (cur_.kind == Tok::Arrow) {
+      advance();
+      if (!parseType(retType))
+        return nullptr;
+    }
+
+    ExprPtr body;
+    if (cur_.kind == Tok::LBrace) {
+      body = parseBlock();
+    } else {
+      if (cur_.kind != Tok::Equal) {
+        diag_.error(cur_.span, "E0026", "メソッド本体の前に '=' か '{' が必要です");
+        return nullptr;
+      }
+      advance();
+      body = parseExpression();
+    }
+    if (!body)
+      return nullptr;
+    if (cur_.kind == Tok::Semicolon)
+      advance(); // メソッド間の区切り (省略可)
+
+    auto proto = std::make_unique<Prototype>();
+    proto->name = ib->typeName + "#" + mname; // グローバルに一意なメソッド名
+    proto->nameSpan = nameSpan;
+    proto->typeParams = ib->typeParams;
+    proto->args = std::move(args);
+    proto->paramTypes = std::move(paramTypes);
+    proto->retType = retType;
+    proto->span = {nameSpan.fileId, nameSpan.start, protoEnd.end};
+    auto fd = std::make_unique<FunctionDef>();
+    fd->proto = std::move(proto);
+    fd->body = std::move(body);
+    ib->methods.push_back(std::move(fd));
+  }
+  if (cur_.kind != Tok::RBrace) {
+    diag_.error(cur_.span, "E0204", "impl には '}' が必要です");
+    return nullptr;
+  }
+  Span end = cur_.span;
+  advance(); // '}'
+  ib->span = {start.fileId, start.start, end.end};
+  return ib;
+}
+
 Program Parser::parseProgram() {
   Program prog;
   for (;;) {
@@ -1021,6 +1232,11 @@ Program Parser::parseProgram() {
     } else if (cur_.kind == Tok::Enum) {
       if (auto ed = parseEnumDef())
         prog.enums.push_back(std::move(ed));
+      else
+        recover();
+    } else if (cur_.kind == Tok::Impl) {
+      if (auto ib = parseImplBlock())
+        prog.impls.push_back(std::move(ib));
       else
         recover();
     } else if (cur_.kind == Tok::Fn) {

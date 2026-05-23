@@ -54,6 +54,7 @@ private:
   Type checkAssign(AssignExpr *e);
   Type checkArrayLit(ArrayLitExpr *e, std::optional<Type> expected);
   Type checkIndex(IndexExpr *e);
+  Type checkMethodCall(MethodCallExpr *e);
   // 代入先 / &mut で借用できる「可変な場所」か
   bool isMutablePlace(const Expr *e);
 
@@ -84,6 +85,8 @@ private:
   std::map<std::string, const StructDef *> structs_;
   std::map<std::string, const EnumDef *> enums_;
   std::map<std::string, VariantInfo> variants_;
+  // 型名 → メソッド名 → メソッド定義 (proto.args[0]="self")
+  std::map<std::string, std::map<std::string, const FunctionDef *>> methods_;
   std::set<std::string> activeTypeParams_; // 検査中の関数の型引数 (resolve 用)
 };
 

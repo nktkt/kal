@@ -1,0 +1,58 @@
+# メソッド: impl ブロックで型に関数を結びつける。
+# レシーバは self / &self / &mut self。x.method(args) で呼ぶ (自動で借用/参照外し)。
+
+struct Point { x: i64, y: i64 }
+
+impl Point {
+  fn norm2(&self) -> i64 = self.x * self.x + self.y * self.y;   # &self: 読み取り
+  fn shift(&mut self, dx: i64, dy: i64) {                       # &mut self: 変更
+    self.x = self.x + dx;
+    self.y = self.y + dy;
+  }
+  fn sum(self) -> i64 = self.x + self.y;                        # self: 値で消費
+}
+
+printi(Point { x: 3, y: 4 }.norm2());     # => 25
+
+{
+  let mut p: Point = Point { x: 1, y: 2 };
+  p.shift(10, 20);          # &mut self メソッドで書き換え
+  printi(p.norm2());        # => 11*11 + 22*22 = 121 + 484 = 605
+  printi(p.sum());          # => 33   (self を値で消費)
+};
+
+# ジェネリックな型へのメソッド (impl の型引数を使う)。
+struct Pair<A, B> { first: A, second: B }
+
+impl Pair<A, B> {
+  fn fst(&self) -> A = self.first;
+  fn swap_first(&mut self, v: A) { self.first = v; }
+}
+
+{
+  let pr: Pair<i64, i64> = Pair { first: 7, second: 9 };
+  printi(pr.fst());         # => 7
+};
+
+{
+  let mut q: Pair<i64, i64> = Pair { first: 1, second: 2 };
+  q.swap_first(100);
+  printi(q.fst());          # => 100
+};
+
+# enum への &self メソッド (match self は参照を自動 deref。借用なので何度でも呼べる)。
+enum Shape { Circle(i64), Rect(i64, i64) }
+
+impl Shape {
+  fn area(&self) -> i64 =
+    match self {
+      Circle(r)  => 3 * r * r,
+      Rect(w, h) => w * h,
+    };
+}
+
+{
+  let s: Shape = Rect(4, 5);
+  printi(s.area());         # => 20
+  printi(s.area());         # => 20  (&self 借用なので再利用可)
+};

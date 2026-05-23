@@ -5,6 +5,13 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Methods (`impl` blocks):** `impl Type { fn m(self, …) … }` defines methods,
+  called as `recv.method(args)`. Receivers are `self` (by value, moves), `&self`
+  (shared borrow), or `&mut self` (mutable borrow), with automatic borrowing of
+  the receiver at the call site. Field access auto-derefs through a reference
+  (so `self.field` works in a `&self` method). Generic types can have methods
+  (`impl Pair<A, B> { … }`), monomorphized per instantiation like generic
+  functions. (Trait-based / inherited methods are future work.)
 - **Bounds-checked indexing:** array and slice indexing `a[i]` (read and write)
   now checks `0 <= i < len` at runtime and aborts with a panic on an
   out-of-range (or negative) index — memory-safe indexing without GC. (Optimized

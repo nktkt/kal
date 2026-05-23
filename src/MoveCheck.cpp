@@ -89,6 +89,16 @@ void MoveCheck::use(const Expr *e) {
     use(b->rhs.get());
     return;
   }
+  case Expr::Kind::MethodCall: {
+    auto *m = static_cast<const MethodCallExpr *>(e);
+    if (m->selfKind == 0)
+      use(m->receiver.get()); // 値レシーバ: ムーブ
+    else
+      requireLive(m->receiver.get()); // &self / &mut self: 借用
+    for (auto &a : m->args)
+      use(a.get());
+    return;
+  }
   case Expr::Kind::Call: {
     auto *c = static_cast<const CallExpr *>(e);
     if (c->isLenBuiltin) {
@@ -180,7 +190,10 @@ void MoveCheck::use(const Expr *e) {
   }
   case Expr::Kind::Match: {
     auto *m = static_cast<const MatchExpr *>(e);
-    use(m->scrutinee.get());
+    if (m->scrutinee->type.isRef())
+      requireLive(m->scrutinee.get()); // &Enum 経由: ムーブしない
+    else
+      use(m->scrutinee.get());
     auto saved = moved_;
     std::map<std::string, Span> result;
     bool first = true;
@@ -259,6 +272,11 @@ bool MoveCheck::run(const Program &program) {
     moved_.clear();
     use(f->body.get());
   }
+  for (auto &ib : program.impls)
+    for (auto &m : ib->methods) {
+      moved_.clear();
+      use(m->body.get());
+    }
   for (auto &e : program.topExprs) {
     moved_.clear();
     use(e.get());

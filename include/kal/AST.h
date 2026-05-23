@@ -34,6 +34,7 @@ struct Expr {
     ArrayLit,
     Index,
     BoolLit,
+    MethodCall,
   };
   Kind kind;
   Span span;
@@ -188,6 +189,24 @@ struct IndexExpr : Expr {
       : Expr(Kind::Index, s), base(std::move(base)), index(std::move(index)) {}
 };
 
+/// メソッド呼び出し: `receiver.method(args)`
+struct MethodCallExpr : Expr {
+  ExprPtr receiver;
+  std::string method;
+  Span methodSpan;
+  std::vector<ExprPtr> args;
+  // Sema が解決する:
+  std::string ownerType;      // レシーバの (deref 後の) 型名
+  std::vector<Type> typeArgs; // impl の型引数 (具体)
+  int selfKind = 0;           // 0=self(値), 1=&self, 2=&mut self
+  bool recvIsRef = false;     // レシーバ式が既に参照型か
+  MethodCallExpr(Span s, ExprPtr receiver, std::string method, Span methodSpan,
+                 std::vector<ExprPtr> args)
+      : Expr(Kind::MethodCall, s), receiver(std::move(receiver)),
+        method(std::move(method)), methodSpan(methodSpan),
+        args(std::move(args)) {}
+};
+
 /// 単項演算: `-operand` (Tok::Minus) または `!operand` (Tok::Bang)
 struct UnaryExpr : Expr {
   Tok op;
@@ -300,12 +319,24 @@ struct EnumDef {
   Span span;
 };
 
+/// impl ブロック: `impl Name<P, ...> { fn m(self, ...) ... }`
+/// 各メソッドは FunctionDef (proto.name = "Name#method"、args[0]="self"、
+/// proto.typeParams = impl の型引数)。
+struct ImplBlock {
+  std::string typeName;
+  Span typeSpan;
+  std::vector<std::string> typeParams;
+  std::vector<std::unique_ptr<FunctionDef>> methods;
+  Span span;
+};
+
 /// 1 つのソースをパースした結果。
 struct Program {
   std::vector<std::unique_ptr<StructDef>> structs;
   std::vector<std::unique_ptr<EnumDef>> enums;
   std::vector<std::unique_ptr<Prototype>> externs;
   std::vector<std::unique_ptr<FunctionDef>> functions;
+  std::vector<std::unique_ptr<ImplBlock>> impls;
   std::vector<ExprPtr> topExprs;
 };
 

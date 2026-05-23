@@ -1,0 +1,6 @@
+error[E0213]: &mut self メソッドには可変な場所が必要です (let mut が必要)
+ --> tests/diagnostics/method_mut_immutable.kal:4:26
+  |
+4 | { let p: P = P { x: 1 }; p.bump(); };
+  |                          ^
+1 個のエラーで中断しました

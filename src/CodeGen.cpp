@@ -192,6 +192,8 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genIndex(static_cast<const IndexExpr *>(e));
   case Expr::Kind::BoolLit:
     return builder_.getInt1(static_cast<const BoolLitExpr *>(e)->value);
+  case Expr::Kind::MethodCall:
+    return genMethodCall(static_cast<const MethodCallExpr *>(e));
   }
   return nullptr;
 }
@@ -214,6 +216,11 @@ Value *CodeGen::genStructLit(const StructLitExpr *e) {
 }
 
 Value *CodeGen::genField(const FieldExpr *e) {
+  // &Struct は自動 deref: ポインタ経由でフィールドを読む
+  if (e->operand->type.isRef()) {
+    Value *addr = genAddr(e);
+    return builder_.CreateLoad(toLLVM(e->type), addr, "field");
+  }
   Value *v = genExpr(e->operand.get());
   return builder_.CreateExtractValue(v, {static_cast<unsigned>(e->fieldIndex)},
                                      "field");
@@ -281,13 +288,22 @@ Value *CodeGen::genAssign(const AssignExpr *e) {
 }
 
 Value *CodeGen::genMatch(const MatchExpr *e) {
-  Value *scrut = genExpr(e->scrutinee.get());
-  StructType *et = cast<StructType>(scrut->getType());
+  // &Enum レシーバ (例 &self) はポインタをそのまま使い、値はメモリへ退避する。
+  StructType *et;
+  Value *slot;
+  if (e->scrutinee->type.isRef()) {
+    slot = genExpr(e->scrutinee.get()); // enum へのポインタ
+    et = getEnumType(e->scrutinee->type.pointee());
+  } else {
+    Value *scrut = genExpr(e->scrutinee.get());
+    et = cast<StructType>(scrut->getType());
+    AllocaInst *a = builder_.CreateAlloca(et);
+    a->setAlignment(Align(8));
+    builder_.CreateStore(scrut, a);
+    slot = a;
+  }
 
-  // scrutinee をメモリに置き、tag と payload を読み出す
-  AllocaInst *slot = builder_.CreateAlloca(et);
-  slot->setAlignment(Align(8));
-  builder_.CreateStore(scrut, slot);
+  // slot から tag と payload を読み出す
   Value *tagPtr = builder_.CreateStructGEP(et, slot, 0, "tagptr");
   Value *tag =
       builder_.CreateLoad(llvm::Type::getInt64Ty(ctx_), tagPtr, "tag");
@@ -434,8 +450,16 @@ Value *CodeGen::genAddr(const Expr *e) {
     return genExpr(static_cast<const DerefExpr *>(e)->operand.get());
   case Expr::Kind::Field: {
     auto *f = static_cast<const FieldExpr *>(e);
-    Value *base = genAddr(f->operand.get());
-    StructType *st = getStructType(f->operand->type);
+    Value *base;
+    kal::Type structT;
+    if (f->operand->type.isRef()) {
+      base = genExpr(f->operand.get()); // 参照値 = struct へのポインタ
+      structT = f->operand->type.pointee();
+    } else {
+      base = genAddr(f->operand.get());
+      structT = f->operand->type;
+    }
+    StructType *st = getStructType(structT);
     return builder_.CreateStructGEP(st, base,
                                     static_cast<unsigned>(f->fieldIndex),
                                     "fieldptr");
@@ -618,6 +642,33 @@ Value *CodeGen::genCall(const CallExpr *e) {
   if (e->type.isUnit())
     return nullptr;
   call->setName("calltmp");
+  return call;
+}
+
+Value *CodeGen::genMethodCall(const MethodCallExpr *e) {
+  const FunctionDef *def = methodDefs_[e->ownerType][e->method];
+  // self 引数を構築: 値レシーバはムーブ、&self/&mut self はポインタを渡す。
+  Value *selfArg;
+  if (e->selfKind == 0)
+    selfArg = genExpr(e->receiver.get()); // 値レシーバ
+  else if (e->recvIsRef)
+    selfArg = genExpr(e->receiver.get()); // 既に参照: そのポインタ値
+  else
+    selfArg = genAddr(e->receiver.get()); // 値の場所を借用
+  std::vector<Value *> args;
+  args.push_back(selfArg);
+  for (auto &a : e->args)
+    args.push_back(genExpr(a.get()));
+  // 型引数を (単態化中なら) 具体化してインスタンスを取得
+  std::vector<kal::Type> targs;
+  for (auto &ta : e->typeArgs)
+    targs.push_back(typeSubst_.empty() ? ta : substType(ta, typeSubst_));
+  Function *callee = ensureInstance(def, targs);
+  CallInst *call = builder_.CreateCall(callee, args);
+  kal::Type rt = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
+  if (rt.isUnit())
+    return nullptr;
+  call->setName("methtmp");
   return call;
 }
 
@@ -818,6 +869,12 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   for (auto &f : program.functions)
     if (!f->proto->typeParams.empty())
       genericFuncDefs_[f->proto->name] = f.get();
+  // メソッドを登録 (呼び出し箇所ごとに単態化する)
+  for (auto &ib : program.impls)
+    for (auto &m : ib->methods) {
+      std::string bare = m->proto->name.substr(ib->typeName.size() + 1);
+      methodDefs_[ib->typeName][bare] = m.get();
+    }
 
   // (1) 全プロトタイプを宣言 (前方参照・相互再帰に対応)。ジェネリックは除く。
   for (auto &ex : program.externs)

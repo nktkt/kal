@@ -261,6 +261,27 @@ enum Result<T, E> { Ok(T), Err(E) }
 無限サイズになるため拒否されます――参照・スライスによる間接化が必要です。次の一歩は
 トレイト境界（本体で値の受け渡し以上のことができるようになる）です（[ROADMAP.md](ROADMAP.md)）。
 
+### メソッド（impl ブロック）
+
+`impl Type { … }` で型にメソッドを結びつけ、`recv.method(args)` で呼びます。
+レシーバは `self`（値・ムーブ）・`&self`（共有借用）・`&mut self`（可変借用）。
+呼び出し側でレシーバは自動的に借用され、フィールドアクセスは参照を自動 deref します
+（`&self` メソッド内で `self.x` が書けます）。ジェネリック型にもメソッドを定義でき、
+ジェネリック関数と同様に具体化ごとに単態化されます。
+
+```
+struct Point { x: i64, y: i64 }
+impl Point {
+  fn norm2(&self) -> i64 = self.x * self.x + self.y * self.y;
+  fn shift(&mut self, dx: i64, dy: i64) { self.x = self.x + dx; self.y = self.y + dy; }
+}
+
+Point { x: 3, y: 4 }.norm2();        # => 25
+{ let mut p: Point = Point { x: 1, y: 2 }; p.shift(10, 20); p.norm2() };   # => 605
+
+impl Pair<A, B> { fn fst(&self) -> A = self.first; }   # ジェネリック型のメソッド
+```
+
 ### 参照
 
 ```
@@ -319,7 +340,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

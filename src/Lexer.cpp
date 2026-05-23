@@ -78,6 +78,10 @@ Token Lexer::next() {
       k = Tok::True;
     else if (s == "false")
       k = Tok::False;
+    else if (s == "impl")
+      k = Tok::Impl;
+    else if (s == "self")
+      k = Tok::SelfKw;
     t.text = s.str();
     return make(k);
   }

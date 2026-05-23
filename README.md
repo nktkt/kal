@@ -276,6 +276,28 @@ needs a `: Option<i64>` annotation or a typed context). A by-value recursive typ
 — it needs indirection (a reference/slice). Trait bounds (so generic bodies can
 do more than move values around) are the next step (see [ROADMAP.md](ROADMAP.md)).
 
+### Methods (`impl` blocks)
+
+`impl Type { … }` attaches methods to a type, called with `recv.method(args)`.
+The receiver is `self` (by value — moves), `&self` (shared borrow), or
+`&mut self` (mutable borrow); the receiver is borrowed automatically at the call
+site, and field access auto-derefs through a reference (so `self.x` works in a
+`&self` method). Generic types can have methods too — they monomorphize per
+instantiation like generic functions.
+
+```
+struct Point { x: i64, y: i64 }
+impl Point {
+  fn norm2(&self) -> i64 = self.x * self.x + self.y * self.y;
+  fn shift(&mut self, dx: i64, dy: i64) { self.x = self.x + dx; self.y = self.y + dy; }
+}
+
+Point { x: 3, y: 4 }.norm2();        # => 25
+{ let mut p: Point = Point { x: 1, y: 2 }; p.shift(10, 20); p.norm2() };   # => 605
+
+impl Pair<A, B> { fn fst(&self) -> A = self.first; }   # methods on a generic type
+```
+
 ### References
 
 ```
@@ -336,7 +358,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

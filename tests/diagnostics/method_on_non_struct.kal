@@ -1,0 +1,2 @@
+# Methods can only be called on struct/enum values.
+{ let n: i64 = 5; printi(n.foo()); };

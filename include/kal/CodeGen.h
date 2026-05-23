@@ -47,6 +47,7 @@ private:
   llvm::Value *genAssign(const AssignExpr *e);
   llvm::Value *genArrayLit(const ArrayLitExpr *e);
   llvm::Value *genIndex(const IndexExpr *e);
+  llvm::Value *genMethodCall(const MethodCallExpr *e);
   llvm::Value *genMatch(const MatchExpr *e);
   llvm::Value *genBorrow(const BorrowExpr *e);
   llvm::Value *genDeref(const DerefExpr *e);
@@ -86,6 +87,9 @@ private:
   std::map<std::string, llvm::StructType *> structTypes_;
   std::map<std::string, const EnumDef *> enumDefs_;
   std::map<std::string, llvm::StructType *> enumTypes_;
+
+  // メソッド: 型名 → メソッド名 → 定義 (ジェネリック関数として単態化する)
+  std::map<std::string, std::map<std::string, const FunctionDef *>> methodDefs_;
 
   // ジェネリック関数とその単態化
   std::map<std::string, const FunctionDef *> genericFuncDefs_;

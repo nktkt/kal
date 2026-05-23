@@ -1,0 +1,6 @@
+error[E0210]: メソッド呼び出しには struct / enum が必要です (実際 i64)
+ --> tests/diagnostics/method_on_non_struct.kal:2:26
+  |
+2 | { let n: i64 = 5; printi(n.foo()); };
+  |                          ^
+1 個のエラーで中断しました

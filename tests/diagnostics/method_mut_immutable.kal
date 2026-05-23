@@ -1,0 +1,4 @@
+# A &mut self method needs a mutable receiver.
+struct P { x: i64 }
+impl P { fn bump(&mut self) { self.x = self.x + 1; } }
+{ let p: P = P { x: 1 }; p.bump(); };

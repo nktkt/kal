@@ -137,6 +137,8 @@ bool Sema::run(Program &program) {
     checkTypeParams(ed->typeParams, ed->nameSpan);
   for (auto &f : program.functions)
     checkTypeParams(f->proto->typeParams, f->proto->nameSpan);
+  for (auto &ib : program.impls)
+    checkTypeParams(ib->typeParams, ib->typeSpan);
 
   // (2) 注釈された型を解決 (enum 名を Struct→Enum に直す)
   for (auto &sd : program.structs) {
@@ -163,6 +165,14 @@ bool Sema::run(Program &program) {
     for (auto &pt : f->proto->paramTypes)
       pt = resolve(bindParams(pt, params)); // 型引数名を Param へ
     f->proto->retType = resolve(bindParams(f->proto->retType, params));
+  }
+  for (auto &ib : program.impls) {
+    std::set<std::string> params(ib->typeParams.begin(), ib->typeParams.end());
+    for (auto &m : ib->methods) {
+      for (auto &pt : m->proto->paramTypes)
+        pt = resolve(bindParams(pt, params)); // self 型・引数型の Param 化
+      m->proto->retType = resolve(bindParams(m->proto->retType, params));
+    }
   }
 
   // (3) 型存在チェック (Ref/Tuple は再帰的に)
@@ -226,6 +236,28 @@ bool Sema::run(Program &program) {
     if (!knownType(f->proto->retType))
       diag_.error(f->proto->span, "E0046",
                   "未定義または不正な型です: " + f->proto->retType.str());
+  }
+  for (auto &ib : program.impls) {
+    // impl の対象型は struct / enum で、型引数の数が一致する必要がある
+    const StructDef *isd = findStruct(ib->typeName);
+    const EnumDef *ied = findEnum(ib->typeName);
+    size_t arity = isd ? isd->typeParams.size()
+                       : ied ? ied->typeParams.size() : 0;
+    if (!isd && !ied)
+      diag_.error(ib->typeSpan, "E0205",
+                  "impl の対象型が未定義です: " + ib->typeName);
+    else if (arity != ib->typeParams.size())
+      diag_.error(ib->typeSpan, "E0205",
+                  "impl の型引数の数が型 " + ib->typeName + " と一致しません");
+    for (auto &m : ib->methods) {
+      for (auto &pt : m->proto->paramTypes)
+        if (!knownType(pt))
+          diag_.error(m->proto->span, "E0046",
+                      "未定義または不正な型です: " + pt.str());
+      if (!knownType(m->proto->retType))
+        diag_.error(m->proto->span, "E0046",
+                    "未定義または不正な型です: " + m->proto->retType.str());
+    }
   }
 
   // (3.5) 無限サイズの値型 (間接化なしの再帰) を拒否する。
@@ -299,9 +331,23 @@ bool Sema::run(Program &program) {
       genericFuncs_[f->proto->name] = f->proto.get(); // ジェネリックは別管理
   }
 
+  // メソッドを (型名, メソッド名) で登録
+  for (auto &ib : program.impls)
+    for (auto &m : ib->methods) {
+      std::string bare = m->proto->name.substr(ib->typeName.size() + 1);
+      if (methods_[ib->typeName].count(bare))
+        diag_.error(m->proto->nameSpan, "E0206",
+                    "メソッドが重複しています: " + ib->typeName + "." + bare);
+      methods_[ib->typeName][bare] = m.get();
+    }
+
   // 各関数本体を検査
   for (auto &f : program.functions)
     checkFunction(*f);
+  // 各メソッド本体を検査
+  for (auto &ib : program.impls)
+    for (auto &m : ib->methods)
+      checkFunction(*m);
 
   // トップレベル式 (型は自由 / 自動表示のために注釈する)
   for (auto &e : program.topExprs)
@@ -388,6 +434,9 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     break;
   case Expr::Kind::BoolLit:
     t = Type::boolean();
+    break;
+  case Expr::Kind::MethodCall:
+    t = checkMethodCall(static_cast<MethodCallExpr *>(e));
     break;
   }
   e->type = t;
@@ -835,28 +884,30 @@ Type Sema::checkStructLit(StructLitExpr *e, std::optional<Type> expected) {
 
 Type Sema::checkField(FieldExpr *e) {
   Type ot = check(e->operand.get(), std::nullopt);
-  if (!ot.isStruct()) {
-    if (ot.isKnown())
+  // &Struct は自動で deref する (&self メソッド本体の self.field など)
+  Type st = ot.isRef() ? ot.pointee() : ot;
+  if (!st.isStruct()) {
+    if (st.isKnown())
       diag_.error(e->operand->span, "E0064",
                   "フィールドアクセスには構造体が必要です (実際 " + ot.str() +
                       ")");
     return Type::unknown();
   }
-  const StructDef *sd = findStruct(ot.name);
+  const StructDef *sd = findStruct(st.name);
   if (!sd)
     return Type::unknown();
   // ジェネリックなら型引数でフィールド型を具体化する
   std::map<std::string, Type> subst;
-  if (!sd->typeParams.empty() && ot.elems.size() == sd->typeParams.size())
+  if (!sd->typeParams.empty() && st.elems.size() == sd->typeParams.size())
     for (size_t i = 0; i < sd->typeParams.size(); ++i)
-      subst[sd->typeParams[i]] = ot.elems[i];
+      subst[sd->typeParams[i]] = st.elems[i];
   for (size_t i = 0; i < sd->fields.size(); ++i)
     if (sd->fields[i].name == e->field) {
       e->fieldIndex = static_cast<int>(i);
       return substType(sd->fields[i].type, subst);
     }
   diag_.error(e->fieldSpan, "E0065",
-              "構造体 " + ot.name + " にフィールド '" + e->field +
+              "構造体 " + st.name + " にフィールド '" + e->field +
                   "' はありません");
   return Type::unknown();
 }
@@ -903,8 +954,13 @@ bool Sema::isMutablePlace(const Expr *e) {
     auto *d = static_cast<const DerefExpr *>(e);
     return d->operand->type.isRef() && d->operand->type.refMut;
   }
-  case Expr::Kind::Field:
-    return isMutablePlace(static_cast<const FieldExpr *>(e)->operand.get());
+  case Expr::Kind::Field: {
+    auto *f = static_cast<const FieldExpr *>(e);
+    // &Struct 経由なら &mut のときのみ可。値なら基底が可変かで決まる。
+    if (f->operand->type.isRef())
+      return f->operand->type.refMut;
+    return isMutablePlace(f->operand.get());
+  }
   case Expr::Kind::TupleIndex:
     return isMutablePlace(static_cast<const TupleIndexExpr *>(e)->operand.get());
   case Expr::Kind::Index: {
@@ -1016,6 +1072,82 @@ Type Sema::checkIndex(IndexExpr *e) {
   return bt.elemType();
 }
 
+Type Sema::checkMethodCall(MethodCallExpr *e) {
+  Type rt = check(e->receiver.get(), std::nullopt);
+  // レシーバが参照なら自動で deref して、その指す型のメソッドを探す
+  e->recvIsRef = rt.isRef();
+  Type baseT = rt.isRef() ? rt.pointee() : rt;
+  if (!baseT.isStruct() && !baseT.isEnum()) {
+    if (baseT.isKnown())
+      diag_.error(e->receiver->span, "E0210",
+                  "メソッド呼び出しには struct / enum が必要です (実際 " +
+                      rt.str() + ")");
+    return Type::unknown();
+  }
+  auto tit = methods_.find(baseT.name);
+  const FunctionDef *m =
+      tit != methods_.end() && tit->second.count(e->method)
+          ? tit->second.at(e->method)
+          : nullptr;
+  if (!m) {
+    diag_.error(e->methodSpan, "E0211",
+                "型 " + baseT.name + " にメソッド '" + e->method +
+                    "' はありません");
+    for (auto &a : e->args)
+      check(a.get(), std::nullopt);
+    return Type::unknown();
+  }
+  const Prototype *proto = m->proto.get();
+  e->ownerType = baseT.name;
+
+  // impl の型引数 = レシーバ型の型引数 (位置対応)
+  std::map<std::string, Type> subst;
+  for (size_t i = 0; i < proto->typeParams.size() && i < baseT.elems.size(); ++i)
+    subst[proto->typeParams[i]] = baseT.elems[i];
+  e->typeArgs.clear();
+  for (auto &p : proto->typeParams)
+    e->typeArgs.push_back(subst.count(p) ? subst[p] : Type::unknown());
+
+  // self の種類 (paramTypes[0] から)
+  const Type &selfT = proto->paramTypes[0];
+  e->selfKind = !selfT.isRef() ? 0 : (selfT.refMut ? 2 : 1);
+
+  // レシーバの適合性
+  if (e->selfKind == 0 && rt.isRef())
+    diag_.error(e->receiver->span, "E0212",
+                "値レシーバのメソッドには値が必要です (参照が渡されています)");
+  if (e->selfKind == 2) { // &mut self
+    if (rt.isRef()) {
+      if (!rt.refMut)
+        diag_.error(e->receiver->span, "E0213",
+                    "&mut self メソッドには可変な参照/場所が必要です");
+    } else if (!isMutablePlace(e->receiver.get())) {
+      diag_.error(e->receiver->span, "E0213",
+                  "&mut self メソッドには可変な場所が必要です (let mut が必要)");
+    }
+  }
+
+  // 引数 (self を除く paramTypes[1..]) を検査
+  size_t want = proto->paramTypes.size() - 1;
+  if (want != e->args.size()) {
+    diag_.error(e->span, "E0103",
+                "引数の数が一致しません (期待 " + std::to_string(want) +
+                    ", 実際 " + std::to_string(e->args.size()) + ")");
+    for (auto &a : e->args)
+      check(a.get(), std::nullopt);
+    return substType(proto->retType, subst);
+  }
+  for (size_t i = 0; i < e->args.size(); ++i) {
+    Type pt = substType(proto->paramTypes[i + 1], subst);
+    Type at = check(e->args[i].get(), pt);
+    if (at.isKnown() && at != pt)
+      diag_.error(e->args[i]->span, "E0104",
+                  "引数の型が一致しません (期待 " + pt.str() + ", 実際 " +
+                      at.str() + ")");
+  }
+  return substType(proto->retType, subst);
+}
+
 Type Sema::checkBorrow(BorrowExpr *e, std::optional<Type> expected) {
   // 期待が参照型なら、その指す型をヒントとして伝える。
   // 期待がスライス &[T] なら、借用元の配列リテラルへ要素型を伝える
@@ -1047,11 +1179,13 @@ Type Sema::checkDeref(DerefExpr *e) {
 }
 
 Type Sema::checkMatch(MatchExpr *e, std::optional<Type> expected) {
-  Type st = check(e->scrutinee.get(), std::nullopt);
+  Type rt = check(e->scrutinee.get(), std::nullopt);
+  // &Enum は自動で deref する (&self メソッド本体の match self など)
+  Type st = rt.isRef() ? rt.pointee() : rt;
   if (!st.isEnum()) {
-    if (st.isKnown())
+    if (rt.isKnown())
       diag_.error(e->scrutinee->span, "E0090",
-                  "match の対象は enum である必要があります (実際 " + st.str() +
+                  "match の対象は enum である必要があります (実際 " + rt.str() +
                       ")");
     for (auto &arm : e->arms)
       check(arm.body.get(), expected);

@@ -1,0 +1,6 @@
+error[E0211]: 型 P にメソッド 'area' はありません
+ --> tests/diagnostics/method_not_found.kal:3:35
+  |
+3 | { let p: P = P { x: 1 }; printi(p.area()); };
+  |                                   ^^^^
+1 個のエラーで中断しました

@@ -133,6 +133,9 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   construction/call; infinite-size recursive types rejected). Generic function
   bodies are checked abstractly; **trait bounds** are what remain to let them do
   more than move values around.
+- **Methods** — ✅ **inherent `impl` blocks done** (`impl Type { fn m(self/&self/
+  &mut self, …) }`, `recv.method(…)`, auto-borrow + field auto-deref; generic
+  impls monomorphize). Trait methods build on this.
 - **Traits** (interfaces / typeclasses) with bounds; associated types.
 - Static dispatch by default; trait objects (dynamic dispatch) where needed.
 - *Exit:* write reusable generic data structures (`Vec<T>`, `Map<K,V>`).
