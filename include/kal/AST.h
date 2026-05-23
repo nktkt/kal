@@ -261,6 +261,8 @@ struct CallExpr : Expr {
   std::string variantEnum;
   // Sema が、これが組み込み len(s) なら設定する (引数は借用・ムーブしない)
   bool isLenBuiltin = false;
+  // Sema が、これが組み込み box(e) なら設定する (ヒープ確保して Box<T> を返す)
+  bool isBoxBuiltin = false;
   // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
   std::vector<Type> typeArgs;
   CallExpr(Span s, std::string callee, Span calleeSpan,

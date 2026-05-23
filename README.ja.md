@@ -65,7 +65,8 @@ AOT バイナリは自己完結します（libc/libm のみリンク）。`kalc`
 `i8 i16 i32 i64`・`u8 u16 u32 u64`・`f32 f64`・`bool`・`()`（unit）に加え、
 ユーザー定義の **`struct`**・**`enum`**（代数的データ型。どちらも**ジェネリック**可――
 `Name<T, …>`、`Option<T>` / `Result<T, E>` は組み込み）・タプル `(T, U, …)`・
-**配列** `[T; N]`・**スライス** `&[T]` / `&mut [T]`・**参照** `&T` / `&mut T`。
+**配列** `[T; N]`・**スライス** `&[T]` / `&mut [T]`・**参照** `&T` / `&mut T`・
+ヒープ確保の **`Box<T>`**。
 整数リテラルの既定は **i32**、小数リテラルは **f64** ですが、文脈から型が決まります
 （例: `n: i64` のとき `n < 2` の `2` は `i64`）。真偽値リテラルは `true` / `false`。
 **暗黙変換はなく**、`as` で明示変換します。
@@ -259,8 +260,7 @@ enum Result<T, E> { Ok(T), Err(E) }
 
 推論できない箇所では型引数の明示が必要です（例: 裸の `None` には `: Option<i64>` の
 注釈か型の決まった文脈が必要）。値として再帰する型（例 `enum List<T> { Cons(T, List<T>), Nil }`）は
-無限サイズになるため拒否されます――参照・スライスによる間接化が必要です。次の一歩は
-トレイト境界（本体で値の受け渡し以上のことができるようになる）です（[ROADMAP.md](ROADMAP.md)）。
+無限サイズになるため拒否されます――参照・スライス・`Box<T>` による間接化が必要です（後述）。
 
 ### 早期リターンと `?` 演算子
 
@@ -352,11 +352,32 @@ fn consume(b: Buf) -> i64 = b.n;
 エイリアス/ライフタイム検査（`&mut` は排他・`&` は複数可・ダングリング防止）は Phase 3 の
 残作業です（[ROADMAP.md](ROADMAP.md)）。
 
+### `Box<T>`（ヒープ）
+
+`box(e)` は `e` をヒープに確保して `Box<T>`（所有ポインタ）を返し、`*b` で中身を読みます。
+`Box` はポインタなので、値だと無限サイズになる**再帰的なデータ型**を表現できます:
+
+```
+let b: Box<i64> = box(42);
+*b;                                          # => 42
+
+enum List<T> { Cons(T, Box<List<T>>), Nil }  # Box で再帰
+fn sum(l: List<i64>) -> i64 =
+  match l { Cons(h, t) => h + sum(*t), Nil => 0 };
+
+sum(Cons(10, box(Cons(20, box(Nil)))));      # => 30
+```
+
+> **注意:** Box はまだ解放されません（リークします）。回収（Drop/RAII）は
+> [ロードマップ](ROADMAP.md)の次の一歩です。リークはメモリ安全（二重解放や
+> use-after-free は起きません）で、メモリを回収しないだけです。
+
 ### 組み込み関数
 - `printi(x: i64)` … 整数を 1 行で表示
 - `printd(x: f64)` … 浮動小数点を 1 行で表示
 - `putchard(x: i64)` … 文字コード x の 1 文字を出力（例: `putchard(10)` で改行）
 - `len(s: &[T]) -> i64` … スライスの長さ
+- `box(x: T) -> Box<T>` … x をヒープへ移す
 
 ### コメント
 `#` から行末まで。
@@ -378,7 +399,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait, question
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait, question, box
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

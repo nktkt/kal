@@ -73,8 +73,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), user-defined
 **`struct`s** and **`enum`s** (algebraic data types) — both optionally
 **generic** (`Name<T, …>`, with `Option<T>` / `Result<T, E>` built in) —
-**tuples** `(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`, and
-**references** `&T` / `&mut T`.
+**tuples** `(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`,
+**references** `&T` / `&mut T`, and the heap-allocated **`Box<T>`**.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 Boolean literals are `true` and `false`.
@@ -274,8 +274,7 @@ enum Result<T, E> { Ok(T), Err(E) }
 Type arguments must be supplied where they can't be inferred (e.g. a bare `None`
 needs a `: Option<i64>` annotation or a typed context). A by-value recursive type
 (e.g. `enum List<T> { Cons(T, List<T>), Nil }`) has infinite size and is rejected
-— it needs indirection (a reference/slice). Trait bounds (so generic bodies can
-do more than move values around) are the next step (see [ROADMAP.md](ROADMAP.md)).
+— it needs indirection (a reference, slice, or `Box<T>`; see below).
 
 ### Early return & the `?` operator
 
@@ -372,11 +371,33 @@ Use-after-move is a compile error (checked in straight-line code, across
 `&mut` xor many `&`, no dangling) is the remaining Phase 3 work
 ([ROADMAP.md](ROADMAP.md)).
 
+### `Box<T>` (heap)
+
+`box(e)` allocates `e` on the heap and returns a `Box<T>` (an owned pointer);
+`*b` reads the value back. Since a `Box` is a pointer, it makes **recursive data
+types** representable (they would otherwise have infinite size):
+
+```
+let b: Box<i64> = box(42);
+*b;                                          # => 42
+
+enum List<T> { Cons(T, Box<List<T>>), Nil }  # recursive via Box
+fn sum(l: List<i64>) -> i64 =
+  match l { Cons(h, t) => h + sum(*t), Nil => 0 };
+
+sum(Cons(10, box(Cons(20, box(Nil)))));      # => 30
+```
+
+> **Note:** boxes are not freed yet — they leak. Reclamation (Drop/RAII) is the
+> next step on the [roadmap](ROADMAP.md). Leaking is memory-*safe* (no
+> double-free or use-after-free); it just doesn't reclaim memory.
+
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
 - `putchard(x: i64)` — write the character with code `x` (`putchard(10)` is a newline)
 - `len(s: &[T]) -> i64` — the length of a slice
+- `box(x: T) -> Box<T>` — move `x` onto the heap
 
 ### Comments
 `#` to end of line.
@@ -398,7 +419,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait, question
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool, methods, trait, question, box
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

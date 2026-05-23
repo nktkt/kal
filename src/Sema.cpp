@@ -20,6 +20,9 @@ const EnumDef *Sema::findEnum(const std::string &name) const {
 }
 
 Type Sema::resolve(Type t) const {
+  // 組み込み Box<T>
+  if (t.kind == Type::Kind::Struct && t.name == "Box" && t.elems.size() == 1)
+    return Type::boxTy(resolve(t.elems[0]));
   // 検査中のジェネリック関数の型引数名は Param へ (本体の let/as 注釈用)
   if (t.kind == Type::Kind::Struct && activeTypeParams_.count(t.name))
     return Type::paramTy(t.name);
@@ -141,11 +144,15 @@ static void collectValueDeps(const Type &t, std::set<std::string> &out) {
 bool Sema::run(Program &program) {
   // (1) 型名 (struct / enum) を登録
   for (auto &sd : program.structs) {
+    if (sd->name == "Box")
+      diag_.error(sd->nameSpan, "E0049", "Box は組み込み型です");
     if (structs_.count(sd->name))
       diag_.error(sd->nameSpan, "E0045", "構造体が重複定義されています");
     structs_[sd->name] = sd.get();
   }
   for (auto &ed : program.enums) {
+    if (ed->name == "Box")
+      diag_.error(ed->nameSpan, "E0049", "Box は組み込み型です");
     if (enums_.count(ed->name) || structs_.count(ed->name))
       diag_.error(ed->nameSpan, "E0085", "型名が重複しています");
     enums_[ed->name] = ed.get();
@@ -249,7 +256,7 @@ bool Sema::run(Program &program) {
           return false;
       return true;
     }
-    if (t.isRef() || t.isArray() || t.isSlice())
+    if (t.isRef() || t.isArray() || t.isSlice() || t.isBox())
       return knownType(t.elems[0]);
     if (t.isTuple()) {
       for (auto &e : t.elems)
@@ -714,6 +721,26 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
     return Type::intTy(64, true);
   }
 
+  // 組み込み box(e) -> Box<T> (ユーザーが box を定義していなければ)
+  if (e->callee == "box" && !funcs_.count("box")) {
+    e->isBoxBuiltin = true;
+    if (e->args.size() != 1) {
+      diag_.error(e->span, "E0245",
+                  "box には引数が 1 つ必要です (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unknown();
+    }
+    std::optional<Type> hint;
+    if (expected && expected->isBox())
+      hint = expected->boxedType(); // 期待が Box<T> なら中身に T を伝える
+    Type at = check(e->args[0].get(), hint);
+    if (!at.isKnown())
+      return Type::unknown();
+    return Type::boxTy(at);
+  }
+
   // ジェネリック関数呼び出し: 期待型 + 引数から型引数を推論する (turbofish 不要)。
   auto git = genericFuncs_.find(e->callee);
   if (git != genericFuncs_.end()) {
@@ -1107,8 +1134,10 @@ bool Sema::isMutablePlace(const Expr *e) {
     return it != locals_.end() && it->second.isMut;
   }
   case Expr::Kind::Deref: {
-    // *p が書けるのは p が &mut のとき
     auto *d = static_cast<const DerefExpr *>(e);
+    // *b (Box) は box が可変な場所なら書ける。*p (&mut) は p が &mut のとき。
+    if (d->operand->type.isBox())
+      return isMutablePlace(d->operand.get());
     return d->operand->type.isRef() && d->operand->type.refMut;
   }
   case Expr::Kind::Field: {
@@ -1447,10 +1476,13 @@ Type Sema::checkBorrow(BorrowExpr *e, std::optional<Type> expected) {
 
 Type Sema::checkDeref(DerefExpr *e) {
   Type t = check(e->operand.get(), std::nullopt);
+  if (t.isBox()) // *b: Box<T> の中身を取り出す
+    return t.boxedType();
   if (!t.isRef()) {
     if (t.isKnown())
       diag_.error(e->span, "E0160",
-                  "参照ではないものを参照外ししています (実際 " + t.str() + ")");
+                  "参照や Box ではないものを参照外ししています (実際 " + t.str() +
+                      ")");
     return Type::unknown();
   }
   return t.pointee();

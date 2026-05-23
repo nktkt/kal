@@ -1,0 +1,38 @@
+# Box<T>: ヒープに確保された所有ポインタ。
+#   box(e)   ヒープに e を確保して Box<T> を返す
+#   *b       Box の中身を取り出す (参照外し)
+# Box はポインタなので「再帰的なデータ型」を作れる (値だと無限サイズ)。
+#
+# 注意: 現状 Box は解放されません (リークします)。Drop/RAII は次の段階で実装します
+#       (リークはメモリ安全 — 二重解放や use-after-free は起きません)。
+
+# 単純な Box: ヒープ上の i64 を読む。
+{
+  let b: Box<i64> = box(42);
+  printi(*b);              # => 42
+};
+
+# 再帰的な enum (Box で間接化することで有限サイズになる)。
+enum List<T> { Cons(T, Box<List<T>>), Nil }
+
+fn sum(l: List<i64>) -> i64 =
+  match l {
+    Cons(h, t) => h + sum(*t),   # *t で残りのリストを取り出して再帰
+    Nil        => 0,
+  };
+
+fn len(l: List<i64>) -> i64 =
+  match l {
+    Cons(h, t) => 1 + len(*t),
+    Nil        => 0,
+  };
+
+# リスト [10, 20, 30] を構築。
+{
+  let xs: List<i64> = Cons(10, box(Cons(20, box(Cons(30, box(Nil))))));
+  printi(sum(xs));        # => 60
+};
+{
+  let ys: List<i64> = Cons(10, box(Cons(20, box(Cons(30, box(Nil))))));
+  printi(len(ys));        # => 3
+};

@@ -1,0 +1,2 @@
+# box takes exactly one argument.
+{ let b: Box<i64> = box(1, 2); printi(*b); };

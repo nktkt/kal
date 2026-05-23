@@ -1,0 +1,6 @@
+error[E0245]: box には引数が 1 つ必要です (実際 2)
+ --> tests/diagnostics/box_wrong_args.kal:2:21
+  |
+2 | { let b: Box<i64> = box(1, 2); printi(*b); };
+  |                     ^^^^^^^^^
+1 個のエラーで中断しました

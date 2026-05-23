@@ -67,6 +67,8 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &rawT) {
     // fat pointer: { 要素先頭ポインタ, i64 長さ }
     return StructType::get(
         ctx_, {PointerType::getUnqual(ctx_), llvm::Type::getInt64Ty(ctx_)});
+  case kal::Type::Kind::Box:
+    return PointerType::getUnqual(ctx_); // ヒープへのポインタ
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
@@ -682,6 +684,16 @@ Value *CodeGen::genCall(const CallExpr *e) {
   // 組み込み len(s): スライス {ptr, len} の len フィールドを取り出す
   if (e->isLenBuiltin)
     return builder_.CreateExtractValue(args[0], {1}, "len");
+  // 組み込み box(e): ヒープに確保して中身を書き込み、ポインタ (Box) を返す
+  if (e->isBoxBuiltin) {
+    llvm::Type *elemTy = toLLVM(e->args[0]->type); // typeSubst_ で具体化済み
+    uint64_t sz = dl_.getTypeAllocSize(elemTy).getFixedValue();
+    Value *raw = builder_.CreateCall(
+        module_->getFunction("malloc"),
+        {ConstantInt::get(llvm::Type::getInt64Ty(ctx_), sz)}, "boxmem");
+    builder_.CreateStore(args[0], raw);
+    return raw;
+  }
   // ジェネリック関数呼び出し: 型引数を (単態化中なら) 具体化して呼ぶ
   auto git = genericFuncDefs_.find(e->callee);
   if (git != genericFuncDefs_.end()) {
@@ -1075,6 +1087,7 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   ensure("printd", voidTy, {f64});
   ensure("putchard", voidTy, {i64});
   ensure("kal_panic", voidTy, {}); // 境界違反などで呼ぶ (メッセージ表示して終了)
+  ensure("malloc", PointerType::getUnqual(ctx_), {i64}); // box(e) のヒープ確保
 
   // (2) 関数本体 (非総称のみ。ジェネリックは呼び出しから単態化される)
   for (auto &f : program.functions)

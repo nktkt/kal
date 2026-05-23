@@ -1,0 +1,2 @@
+# Box is a built-in type and cannot be redefined.
+struct Box { x: i64 }

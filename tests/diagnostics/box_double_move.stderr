@@ -1,0 +1,6 @@
+error[E0180]: ムーブ済みの値を使用しています
+ --> tests/diagnostics/box_double_move.kal:4:63
+  |
+4 | { let b: Box<S> = box(S { x: 1 }); let p: S = *b; let q: S = *b; printi(p.x + q.x); };
+  |                                                               ^
+1 個のエラーで中断しました

@@ -5,6 +5,12 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **`Box<T>` (heap):** `box(e)` allocates `e` on the heap and returns a
+  `Box<T>` (an owned pointer); `*b` reads it. Because a `Box` is a pointer,
+  **recursive types** are now expressible (`enum List<T> { Cons(T, Box<List<T>>),
+  Nil }`) — by-value recursion is still rejected. **Note:** boxes are not freed
+  yet (they leak); reclamation (Drop/RAII) is the next step. Leaking is
+  memory-*safe* (no double-free / use-after-free).
 - **Early return & `?`:** `return e;` (and `return;`) exits a function early; the
   `?` operator on an `Option`/`Result` unwraps the success value or early-returns
   the `None`/`Err` (the error type must match the function's). `if cond then e`

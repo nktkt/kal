@@ -44,6 +44,8 @@ std::string Type::str() const {
     return "[" + elems[0].str() + "; " + std::to_string(arrayLen) + "]";
   case Kind::Slice:
     return std::string("&") + (refMut ? "mut " : "") + "[" + elems[0].str() + "]";
+  case Kind::Box:
+    return "Box<" + elems[0].str() + ">";
   }
   return "<?>";
 }

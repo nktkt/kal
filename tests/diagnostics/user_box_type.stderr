@@ -1,0 +1,6 @@
+error[E0049]: Box は組み込み型です
+ --> tests/diagnostics/user_box_type.kal:2:8
+  |
+2 | struct Box { x: i64 }
+  |        ^^^
+1 個のエラーで中断しました

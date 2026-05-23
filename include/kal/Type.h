@@ -11,7 +11,7 @@ namespace kal {
 struct Type {
   enum class Kind {
     Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref, Array, Slice,
-    Param
+    Param, Box
   };
   Kind kind = Kind::Unknown;
   unsigned bits = 0;        // Int: 8/16/32/64, Float: 32/64, Bool: 1
@@ -58,6 +58,12 @@ struct Type {
     t.name = std::move(n);
     return t;
   }
+  static Type boxTy(Type elem) {
+    Type t;
+    t.kind = Kind::Box;
+    t.elems.push_back(std::move(elem));
+    return t;
+  }
   static Type refTy(Type pointee, bool mut) {
     Type t;
     t.kind = Kind::Ref;
@@ -91,6 +97,8 @@ struct Type {
   bool isArray() const { return kind == Kind::Array; }
   bool isSlice() const { return kind == Kind::Slice; }
   bool isParam() const { return kind == Kind::Param; }
+  bool isBox() const { return kind == Kind::Box; }
+  const Type &boxedType() const { return elems[0]; } // Box のとき有効
   bool isNumeric() const { return isInt() || isFloat(); }
   bool isKnown() const { return kind != Kind::Unknown; }
   const Type &pointee() const { return elems[0]; }   // Ref のとき有効
@@ -117,6 +125,8 @@ struct Type {
       return arrayLen == o.arrayLen && elems[0] == o.elems[0];
     case Kind::Slice:
       return refMut == o.refMut && elems[0] == o.elems[0];
+    case Kind::Box:
+      return elems[0] == o.elems[0];
     default:
       return true;
     }

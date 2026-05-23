@@ -179,9 +179,15 @@ void MoveCheck::use(const Expr *e) {
     return;
   case Expr::Kind::Deref: {
     auto *d = static_cast<const DerefExpr *>(e);
-    requireLive(d->operand.get());
-    if (!isCopy(e->type))
-      diag_.error(e->span, "E0181", "参照からムーブすることはできません");
+    if (d->operand->type.isBox() && !isCopy(e->type)) {
+      // 箱の中身を非 Copy でムーブ取り出し = 箱ごと消費する (Rust の *box と同じ)。
+      // これで同じ中身の二重取り出し (Drop 実装時の二重解放) を防ぐ。
+      use(d->operand.get());
+    } else {
+      requireLive(d->operand.get());
+      if (!d->operand->type.isBox() && !isCopy(e->type))
+        diag_.error(e->span, "E0181", "参照からムーブすることはできません");
+    }
     return;
   }
   case Expr::Kind::If: {

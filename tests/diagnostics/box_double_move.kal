@@ -1,0 +1,4 @@
+# Moving a non-Copy value out of a Box consumes the box; doing it twice is an
+# error (this is what prevents a double-free once Drop lands).
+struct S { x: i64 }
+{ let b: Box<S> = box(S { x: 1 }); let p: S = *b; let q: S = *b; printi(p.x + q.x); };
