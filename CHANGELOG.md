@@ -5,6 +5,11 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Slices:** `&[T]` / `&mut [T]` — a length-carrying view into an array
+  (a fat pointer `{ptr, len}`). Borrowing an array yields a slice (`&xs`,
+  `&mut xs`), `len(s)` returns its length, and `s[i]` reads/writes through it
+  (writes need `&mut [T]`). `&[T]` is `Copy`, `&mut [T]` moves. Lets a function
+  take an array of any length (`fn sum(s: &[i64]) -> i64`). No bounds checks yet.
 - **Arrays:** fixed-length arrays `[T; N]`, array literals `[e1, …, eN]`, and
   indexing `a[i]` (read and write). Arrays nest (`[[i64; 2]; 2]`) and are `Copy`
   when their element type is (numbers, `bool`); otherwise they move. Indexing is

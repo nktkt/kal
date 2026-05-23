@@ -1,0 +1,6 @@
+error[E0104]: 引数の型が一致しません (期待 &[i64], 実際 &[i32])
+ --> tests/diagnostics/slice_type_mismatch.kal:3:31
+  |
+3 | { let a: [i32; 2] = [1, 2]; g(&a); };
+  |                               ^^
+1 個のエラーで中断しました

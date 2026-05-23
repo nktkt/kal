@@ -64,7 +64,7 @@ AOT バイナリは自己完結します（libc/libm のみリンク）。`kalc`
 ### 型
 `i8 i16 i32 i64`・`u8 u16 u32 u64`・`f32 f64`・`bool`・`()`（unit）に加え、
 ユーザー定義の **`struct`**・**`enum`**（代数的データ型）・タプル `(T, U, …)`・
-**配列** `[T; N]`・**参照** `&T` / `&mut T`。
+**配列** `[T; N]`・**スライス** `&[T]` / `&mut [T]`・**参照** `&T` / `&mut T`。
 整数リテラルの既定は **i32**、小数リテラルは **f64** ですが、文脈から型が決まります
 （例: `n: i64` のとき `n < 2` の `2` は `i64`）。**暗黙変換はなく**、`as` で明示変換します。
 
@@ -148,6 +148,32 @@ grid[1][0];                             # => 3
 `&mut` が必要）、添字は任意の整数型です。**境界チェックはまだありません**――
 範囲外アクセスは未定義動作です（将来追加予定）。
 
+### スライス
+
+スライス `&[T]` / `&mut [T]` は配列への「長さを持つビュー」――fat pointer
+`{ptr, len}` です。**配列を借用するとスライスになり**、関数が任意長の配列を
+扱えるようになります:
+
+```
+fn sum(s: &[i64]) -> i64 = {        # 任意長のスライスを受け取る
+  let mut total: i64 = 0;
+  for i = 0 as i64, i < len(s), 1 in { total = total + s[i]; };
+  total
+};
+
+fn fill(s: &mut [i64], v: i64) = {  # &mut [T] はスライス越しに書き込める
+  for i = 0 as i64, i < len(s), 1 in { s[i] = v; };
+};
+
+{ let xs: [i64; 4] = [10, 20, 30, 40]; sum(&xs) };   # => 100  (&xs はスライス)
+{ let mut ys: [i64; 3] = [0, 0, 0]; fill(&mut ys, 7); ys[0] };   # => 7
+```
+
+`len(s)` はスライスの長さを `i64` で返します。`s[i]` は i 番目の要素を読み
+（`&mut [T]` なら書き）ます――配列の添字と同様、**境界チェックはまだありません**。
+`&[T]` は `Copy`（`&T` と同様）、`&mut [T]` はムーブ（`&mut T` と同様）。スライス
+から非 `Copy` の要素をムーブして取り出すことはできません。
+
 ### ブロック・`let`・ミューテーション
 
 ```
@@ -221,6 +247,7 @@ fn consume(b: Buf) -> i64 = b.n;
 - `printi(x: i64)` … 整数を 1 行で表示
 - `printd(x: f64)` … 浮動小数点を 1 行で表示
 - `putchard(x: i64)` … 文字コード x の 1 文字を出力（例: `putchard(10)` で改行）
+- `len(s: &[T]) -> i64` … スライスの長さ
 
 ### コメント
 `#` から行末まで。
@@ -242,7 +269,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

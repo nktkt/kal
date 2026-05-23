@@ -72,7 +72,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 ### Types
 `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), user-defined
 **`struct`s**, **`enum`s** (algebraic data types), **tuples** `(T, U, …)`,
-**arrays** `[T; N]`, and **references** `&T` / `&mut T`.
+**arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`, and **references**
+`&T` / `&mut T`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 There are **no implicit conversions** — convert explicitly with `as`.
@@ -157,6 +158,32 @@ like a struct. Indexing `a[i]` reads or writes (the latter needs a `mut` binding
 or `&mut`); the index is any integer. Indexing is **not** bounds-checked yet — an
 out-of-range index is undefined behavior (a planned addition).
 
+### Slices
+
+A slice `&[T]` / `&mut [T]` is a length-carrying view into an array — a fat
+pointer `{ptr, len}`. **Borrowing an array produces a slice**, which lets a
+function work on an array of any length:
+
+```
+fn sum(s: &[i64]) -> i64 = {        # takes a slice of any length
+  let mut total: i64 = 0;
+  for i = 0 as i64, i < len(s), 1 in { total = total + s[i]; };
+  total
+};
+
+fn fill(s: &mut [i64], v: i64) = {  # &mut [T] can write through the slice
+  for i = 0 as i64, i < len(s), 1 in { s[i] = v; };
+};
+
+{ let xs: [i64; 4] = [10, 20, 30, 40]; sum(&xs) };   # => 100  (&xs is a slice)
+{ let mut ys: [i64; 3] = [0, 0, 0]; fill(&mut ys, 7); ys[0] };   # => 7
+```
+
+`len(s)` returns the slice's length as `i64`. `s[i]` reads (or, through a
+`&mut [T]`, writes) the i-th element; like array indexing it is **not**
+bounds-checked yet. `&[T]` is `Copy` (like `&T`); `&mut [T]` moves (like
+`&mut T`). You cannot move a non-`Copy` element out of a slice.
+
 ### Blocks, `let` & mutation
 
 ```
@@ -233,6 +260,7 @@ Use-after-move is a compile error (checked in straight-line code, across
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
 - `putchard(x: i64)` — write the character with code `x` (`putchard(10)` is a newline)
+- `len(s: &[T]) -> i64` — the length of a slice
 
 ### Comments
 `#` to end of line.
@@ -254,7 +282,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

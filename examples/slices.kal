@@ -1,0 +1,33 @@
+# スライス &[T]: 長さを持つ配列への参照 (fat pointer {ptr, len})。
+# 配列を借用するとスライスになる。len(s) で長さ、s[i] で要素アクセス。
+
+# 不変スライスを受け取り合計する (配列の長さに依存しない)。
+fn sum(s: &[i64]) -> i64 = {
+  let mut total: i64 = 0;
+  for i = 0 as i64, i < len(s), 1 in {
+    total = total + s[i];
+  };
+  total
+};
+
+# 可変スライス越しに全要素へ書き込む。
+fn fill(s: &mut [i64], v: i64) = {
+  for i = 0 as i64, i < len(s), 1 in {
+    s[i] = v;
+  };
+};
+
+{
+  let xs: [i64; 4] = [10, 20, 30, 40];
+  printi(len(&xs));        # => 4    (配列を借用するとスライスになる)
+  printi(sum(&xs));        # => 100
+};
+
+# 配列リテラルを直接借用 (要素型は引数 &[i64] から推論される)。
+printi(sum(&[5, 15, 25]));   # => 45
+
+{
+  let mut ys: [i64; 3] = [1, 2, 3];
+  fill(&mut ys, 7);        # 可変スライスで全要素を 7 に
+  for i = 0, i < 3, 1 in printi(ys[i]);   # 7 7 7
+};

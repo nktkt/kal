@@ -10,7 +10,7 @@ namespace kal {
 /// Kal の型。整数・浮動小数点・bool・unit に加え、struct (公称) と tuple (構造的)。
 struct Type {
   enum class Kind {
-    Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref, Array
+    Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref, Array, Slice
   };
   Kind kind = Kind::Unknown;
   unsigned bits = 0;        // Int: 8/16/32/64, Float: 32/64, Bool: 1
@@ -57,6 +57,13 @@ struct Type {
     t.elems.push_back(std::move(elem));
     return t;
   }
+  static Type sliceTy(Type elem, bool mut) {
+    Type t;
+    t.kind = Kind::Slice;
+    t.refMut = mut;
+    t.elems.push_back(std::move(elem));
+    return t;
+  }
 
   bool isInt() const { return kind == Kind::Int; }
   bool isFloat() const { return kind == Kind::Float; }
@@ -67,10 +74,11 @@ struct Type {
   bool isEnum() const { return kind == Kind::Enum; }
   bool isRef() const { return kind == Kind::Ref; }
   bool isArray() const { return kind == Kind::Array; }
+  bool isSlice() const { return kind == Kind::Slice; }
   bool isNumeric() const { return isInt() || isFloat(); }
   bool isKnown() const { return kind != Kind::Unknown; }
   const Type &pointee() const { return elems[0]; }   // Ref のとき有効
-  const Type &elemType() const { return elems[0]; }  // Array のとき有効
+  const Type &elemType() const { return elems[0]; }  // Array / Slice のとき有効
 
   bool operator==(const Type &o) const {
     if (kind != o.kind)
@@ -89,6 +97,8 @@ struct Type {
       return refMut == o.refMut && elems[0] == o.elems[0];
     case Kind::Array:
       return arrayLen == o.arrayLen && elems[0] == o.elems[0];
+    case Kind::Slice:
+      return refMut == o.refMut && elems[0] == o.elems[0];
     default:
       return true;
     }

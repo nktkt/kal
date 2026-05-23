@@ -31,6 +31,8 @@ std::string Type::str() const {
     return std::string("&") + (refMut ? "mut " : "") + elems[0].str();
   case Kind::Array:
     return "[" + elems[0].str() + "; " + std::to_string(arrayLen) + "]";
+  case Kind::Slice:
+    return std::string("&") + (refMut ? "mut " : "") + "[" + elems[0].str() + "]";
   }
   return "<?>";
 }

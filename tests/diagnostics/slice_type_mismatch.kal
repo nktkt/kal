@@ -1,0 +1,3 @@
+# A &[i32] slice is not a &[i64] slice (element types must match).
+fn g(s: &[i64]) -> i64 = len(s);
+{ let a: [i32; 2] = [1, 2]; g(&a); };

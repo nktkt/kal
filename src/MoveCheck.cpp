@@ -16,7 +16,8 @@ bool MoveCheck::isCopy(const Type &t) const {
   case Type::Kind::Unknown: // エラー型は誤検出を避けてコピー扱い
     return true;
   case Type::Kind::Ref:
-    return !t.refMut; // &T はコピー、&mut T はムーブ
+  case Type::Kind::Slice:
+    return !t.refMut; // &T / &[T] はコピー、&mut は ムーブ
   case Type::Kind::Array:
     return isCopy(t.elems[0]); // 要素が Copy なら配列も Copy
   default:
@@ -89,6 +90,11 @@ void MoveCheck::use(const Expr *e) {
   }
   case Expr::Kind::Call: {
     auto *c = static_cast<const CallExpr *>(e);
+    if (c->isLenBuiltin) {
+      for (auto &a : c->args)
+        requireLive(a.get()); // len は借用: 引数をムーブしない
+      return;
+    }
     for (auto &a : c->args)
       use(a.get());
     return;
@@ -120,10 +126,16 @@ void MoveCheck::use(const Expr *e) {
   case Expr::Kind::Index: {
     auto *ix = static_cast<const IndexExpr *>(e);
     use(ix->index.get()); // 添字値は評価される
-    if (isCopy(e->type))
+    if (ix->base->type.isSlice()) {
+      // スライスは借用なので中身をムーブできない (deref と同様)
+      requireLive(ix->base.get());
+      if (!isCopy(e->type))
+        diag_.error(e->span, "E0184", "スライスからムーブすることはできません");
+    } else if (isCopy(e->type)) {
       requireLive(ix->base.get()); // Copy 要素の読みはムーブしない
-    else
-      use(ix->base.get()); // 非 Copy 要素 → ベース全体をムーブ (保守的)
+    } else {
+      use(ix->base.get()); // 非 Copy 要素 → 配列全体をムーブ (保守的)
+    }
     return;
   }
   case Expr::Kind::Field: {

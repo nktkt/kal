@@ -46,6 +46,10 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
   }
   case kal::Type::Kind::Array:
     return ArrayType::get(toLLVM(t.elems[0]), t.arrayLen);
+  case kal::Type::Kind::Slice:
+    // fat pointer: { 要素先頭ポインタ, i64 長さ }
+    return StructType::get(
+        ctx_, {PointerType::getUnqual(ctx_), llvm::Type::getInt64Ty(ctx_)});
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
@@ -392,10 +396,18 @@ Value *CodeGen::genAddr(const Expr *e) {
   }
   case Expr::Kind::Index: {
     auto *ix = static_cast<const IndexExpr *>(e);
-    Value *base = genAddr(ix->base.get());
     Value *idx = genExpr(ix->index.get());
-    llvm::Type *at = toLLVM(ix->base->type); // [N x T]
-    // GEP {0, idx}: 配列の先頭から idx 番目の要素アドレス (境界チェックなし)
+    // 境界チェックなし
+    if (ix->base->type.isSlice()) {
+      // スライス {ptr, len}: 先頭ポインタから要素型で GEP {idx}
+      Value *s = genExpr(ix->base.get());
+      Value *data = builder_.CreateExtractValue(s, {0}, "sliceptr");
+      llvm::Type *elemTy = toLLVM(ix->base->type.elemType());
+      return builder_.CreateGEP(elemTy, data, {idx}, "elemptr");
+    }
+    // 配列 [N x T]: アドレスから GEP {0, idx}
+    Value *base = genAddr(ix->base.get());
+    llvm::Type *at = toLLVM(ix->base->type);
     Value *zero = ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0);
     return builder_.CreateGEP(at, base, {zero, idx}, "elemptr");
   }
@@ -410,7 +422,19 @@ Value *CodeGen::genAddr(const Expr *e) {
 }
 
 Value *CodeGen::genBorrow(const BorrowExpr *e) {
-  return genAddr(e->operand.get()); // 参照値 = アドレス
+  Value *addr = genAddr(e->operand.get());
+  const kal::Type &ot = e->operand->type;
+  if (ot.isArray()) {
+    // 配列の借用 → スライス { 先頭ポインタ, 長さ }。
+    // opaque pointer なので配列のアドレスがそのまま要素先頭を指す。
+    llvm::Type *st = toLLVM(e->type); // { ptr, i64 }
+    Value *agg = UndefValue::get(st);
+    agg = builder_.CreateInsertValue(agg, addr, {0});
+    agg = builder_.CreateInsertValue(
+        agg, ConstantInt::get(llvm::Type::getInt64Ty(ctx_), ot.arrayLen), {1});
+    return agg;
+  }
+  return addr; // 通常の参照 = アドレス
 }
 
 Value *CodeGen::genDeref(const DerefExpr *e) {
@@ -516,6 +540,9 @@ Value *CodeGen::genCall(const CallExpr *e) {
     args.push_back(genExpr(a.get()));
   if (e->variantTag >= 0) // enum バリアント構築
     return genVariant(e->variantEnum, e->variantTag, args);
+  // 組み込み len(s): スライス {ptr, len} の len フィールドを取り出す
+  if (e->isLenBuiltin)
+    return builder_.CreateExtractValue(args[0], {1}, "len");
   Function *callee = module_->getFunction(e->callee);
   CallInst *call = builder_.CreateCall(callee, args);
   if (e->type.isUnit())

@@ -214,6 +214,8 @@ struct CallExpr : Expr {
   // Sema が、これが enum バリアント構築なら設定する
   int variantTag = -1;
   std::string variantEnum;
+  // Sema が、これが組み込み len(s) なら設定する (引数は借用・ムーブしない)
+  bool isLenBuiltin = false;
   CallExpr(Span s, std::string callee, Span calleeSpan,
            std::vector<ExprPtr> args)
       : Expr(Kind::Call, s), callee(std::move(callee)), calleeSpan(calleeSpan),

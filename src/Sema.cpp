@@ -23,7 +23,7 @@ Type Sema::resolve(Type t) const {
   if (t.kind == Type::Kind::Struct && findEnum(t.name))
     t.kind = Type::Kind::Enum; // パーサが Struct と誤判定した enum 名を直す
   else if (t.kind == Type::Kind::Tuple || t.kind == Type::Kind::Ref ||
-           t.kind == Type::Kind::Array)
+           t.kind == Type::Kind::Array || t.kind == Type::Kind::Slice)
     for (auto &e : t.elems)
       e = resolve(e);
   return t;
@@ -67,7 +67,7 @@ bool Sema::run(Program &program) {
       return findStruct(t.name) != nullptr;
     if (t.isEnum())
       return findEnum(t.name) != nullptr;
-    if (t.isRef() || t.isArray())
+    if (t.isRef() || t.isArray() || t.isSlice())
       return knownType(t.elems[0]);
     if (t.isTuple()) {
       for (auto &e : t.elems)
@@ -296,6 +296,25 @@ Type Sema::checkUnary(UnaryExpr *e, std::optional<Type> expected) {
 }
 
 Type Sema::checkCall(CallExpr *e) {
+  // 組み込み len(s: &[T]) -> i64 (ユーザーが len を定義していなければ)
+  if (e->callee == "len" && !funcs_.count("len")) {
+    e->isLenBuiltin = true;
+    if (e->args.size() != 1) {
+      diag_.error(e->span, "E0108",
+                  "len には引数が 1 つ必要です (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::intTy(64, true);
+    }
+    Type at = check(e->args[0].get(), std::nullopt);
+    if (at.isKnown() && !at.isSlice())
+      diag_.error(e->args[0]->span, "E0109",
+                  "len の引数はスライスである必要があります (実際 " + at.str() +
+                      ")");
+    return Type::intTy(64, true);
+  }
+
   auto it = funcs_.find(e->callee);
   if (it == funcs_.end()) {
     // 関数でなければ enum バリアント構築かもしれない
@@ -513,8 +532,13 @@ bool Sema::isMutablePlace(const Expr *e) {
     return isMutablePlace(static_cast<const FieldExpr *>(e)->operand.get());
   case Expr::Kind::TupleIndex:
     return isMutablePlace(static_cast<const TupleIndexExpr *>(e)->operand.get());
-  case Expr::Kind::Index:
-    return isMutablePlace(static_cast<const IndexExpr *>(e)->base.get());
+  case Expr::Kind::Index: {
+    auto *ix = static_cast<const IndexExpr *>(e);
+    // スライス越しの書き込みは &mut [T] のときのみ可 (束縛の mut とは独立)。
+    if (ix->base->type.isSlice())
+      return ix->base->type.refMut;
+    return isMutablePlace(ix->base.get()); // 配列: ベースが可変なら可変
+  }
   default:
     return false;
   }
@@ -607,25 +631,32 @@ Type Sema::checkIndex(IndexExpr *e) {
   if (it.isKnown() && !it.isInt())
     diag_.error(e->index->span, "E0192",
                 "添字には整数型が必要です (実際 " + it.str() + ")");
-  if (!bt.isArray()) {
+  if (!bt.isArray() && !bt.isSlice()) {
     if (bt.isKnown())
       diag_.error(e->base->span, "E0193",
-                  "配列ではないものに添字アクセスしています (実際 " + bt.str() +
-                      ")");
+                  "配列・スライスではないものに添字アクセスしています (実際 " +
+                      bt.str() + ")");
     return Type::unknown();
   }
   return bt.elemType();
 }
 
 Type Sema::checkBorrow(BorrowExpr *e, std::optional<Type> expected) {
-  // 期待が参照型なら、その指す型をヒントとして伝える
+  // 期待が参照型なら、その指す型をヒントとして伝える。
+  // 期待がスライス &[T] なら、借用元の配列リテラルへ要素型を伝える
+  // (長さは配列リテラル側が決めるので 0 で良い)。
   std::optional<Type> hint;
   if (expected && expected->isRef())
     hint = expected->pointee();
+  else if (expected && expected->isSlice())
+    hint = Type::arrayTy(expected->elemType(), 0);
   Type t = check(e->operand.get(), hint);
   if (e->isMut && !isMutablePlace(e->operand.get()))
     diag_.error(e->span, "E0172",
                 "&mut で借用するには可変な場所が必要です (let mut が必要)");
+  // 配列の借用はスライス &[T] になる (fat pointer)。それ以外は通常の参照。
+  if (t.isArray())
+    return Type::sliceTy(t.elemType(), e->isMut);
   return Type::refTy(t, e->isMut);
 }
 

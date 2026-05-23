@@ -1,0 +1,2 @@
+# `len` takes a slice &[T], not an array (borrow it first: len(&a)).
+len([1, 2, 3]);

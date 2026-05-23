@@ -1,0 +1,6 @@
+error[E0170]: 可変でない場所には代入できません (let mut / &mut が必要)
+ --> tests/diagnostics/slice_write_immutable.kal:2:21
+  |
+2 | fn f(s: &[i64]) = { s[0] = 9; };
+  |                     ^^^^
+1 個のエラーで中断しました

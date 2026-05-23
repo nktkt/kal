@@ -61,6 +61,21 @@ bool Parser::parseType(Type &out) {
       mut = true;
       advance();
     }
+    // スライス型:  &[T]  /  &mut [T]
+    if (cur_.kind == Tok::LBracket) {
+      advance();
+      Type elem;
+      if (!parseType(elem))
+        return false;
+      if (cur_.kind != Tok::RBracket) {
+        diag_.error(cur_.span, "E0038",
+                    "スライス型は '&[T]' の形式です (']' が必要)");
+        return false;
+      }
+      advance();
+      out = Type::sliceTy(elem, mut);
+      return true;
+    }
     Type pointee;
     if (!parseType(pointee))
       return false;
