@@ -43,6 +43,8 @@ private:
   llvm::Value *genTupleIndex(const TupleIndexExpr *e);
   llvm::Value *genBlock(const BlockExpr *e);
   llvm::Value *genAssign(const AssignExpr *e);
+  llvm::Value *genArrayLit(const ArrayLitExpr *e);
+  llvm::Value *genIndex(const IndexExpr *e);
   llvm::Value *genMatch(const MatchExpr *e);
   llvm::Value *genBorrow(const BorrowExpr *e);
   llvm::Value *genDeref(const DerefExpr *e);

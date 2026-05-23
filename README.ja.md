@@ -64,7 +64,7 @@ AOT バイナリは自己完結します（libc/libm のみリンク）。`kalc`
 ### 型
 `i8 i16 i32 i64`・`u8 u16 u32 u64`・`f32 f64`・`bool`・`()`（unit）に加え、
 ユーザー定義の **`struct`**・**`enum`**（代数的データ型）・タプル `(T, U, …)`・
-**参照** `&T` / `&mut T`。
+**配列** `[T; N]`・**参照** `&T` / `&mut T`。
 整数リテラルの既定は **i32**、小数リテラルは **f64** ですが、文脈から型が決まります
 （例: `n: i64` のとき `n < 2` の `2` は `i64`）。**暗黙変換はなく**、`as` で明示変換します。
 
@@ -130,6 +130,23 @@ Point { x: 3.0, y: 4.0 }.x;         # => 3
 ```
 
 構造体・タプルは値型（値渡し・値返し）です。
+
+### 配列
+
+```
+let xs: [i64; 4] = [10, 20, 30, 40];   # 固定長 [T; N]・配列リテラル [..]
+xs[2];                                  # => 30   (添字で要素を読む)
+xs[0] = 99;                             # 添字経由で書き込み (let mut が必要)
+
+let grid: [[i64; 2]; 2] = [[1, 2], [3, 4]];   # 配列は入れ子にできる
+grid[1][0];                             # => 3
+```
+
+`[T; N]` は `T` の要素が `N` 個連続したものです。リテラルの全要素は同じ型で、
+`[T; N]` は `T` が `Copy`（数値・`bool`）なら `Copy`、そうでなければ構造体と
+同様にムーブされます。添字 `a[i]` は読み書きでき（書き込みには `mut` 束縛か
+`&mut` が必要）、添字は任意の整数型です。**境界チェックはまだありません**――
+範囲外アクセスは未定義動作です（将来追加予定）。
 
 ### ブロック・`let`・ミューテーション
 
@@ -225,7 +242,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

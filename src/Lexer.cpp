@@ -180,6 +180,10 @@ Token Lexer::next() {
     return make(Tok::LBrace);
   case '}':
     return make(Tok::RBrace);
+  case '[':
+    return make(Tok::LBracket);
+  case ']':
+    return make(Tok::RBracket);
   case ',':
     return make(Tok::Comma);
   case ';':

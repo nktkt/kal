@@ -1,0 +1,2 @@
+# Indexing something that is not an array.
+fn f(n: i64) -> i64 = n[0];

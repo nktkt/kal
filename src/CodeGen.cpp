@@ -44,6 +44,8 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
       elems.push_back(toLLVM(e));
     return StructType::get(ctx_, elems);
   }
+  case kal::Type::Kind::Array:
+    return ArrayType::get(toLLVM(t.elems[0]), t.arrayLen);
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
@@ -146,6 +148,10 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genDeref(static_cast<const DerefExpr *>(e));
   case Expr::Kind::Unary:
     return genUnary(static_cast<const UnaryExpr *>(e));
+  case Expr::Kind::ArrayLit:
+    return genArrayLit(static_cast<const ArrayLitExpr *>(e));
+  case Expr::Kind::Index:
+    return genIndex(static_cast<const IndexExpr *>(e));
   }
   return nullptr;
 }
@@ -185,6 +191,20 @@ Value *CodeGen::genTupleLit(const TupleLitExpr *e) {
 Value *CodeGen::genTupleIndex(const TupleIndexExpr *e) {
   Value *v = genExpr(e->operand.get());
   return builder_.CreateExtractValue(v, {e->index}, "telem");
+}
+
+Value *CodeGen::genArrayLit(const ArrayLitExpr *e) {
+  llvm::Type *at = toLLVM(e->type); // [N x T]
+  Value *agg = UndefValue::get(at);
+  for (size_t i = 0; i < e->elems.size(); ++i)
+    agg = builder_.CreateInsertValue(agg, genExpr(e->elems[i].get()),
+                                     {static_cast<unsigned>(i)});
+  return agg;
+}
+
+Value *CodeGen::genIndex(const IndexExpr *e) {
+  Value *addr = genAddr(e); // 要素アドレスを計算して
+  return builder_.CreateLoad(toLLVM(e->type), addr, "idxval"); // 読み出す
 }
 
 Value *CodeGen::genBlock(const BlockExpr *e) {
@@ -369,6 +389,15 @@ Value *CodeGen::genAddr(const Expr *e) {
     Value *base = genAddr(t->operand.get());
     auto *tt = cast<StructType>(toLLVM(t->operand->type));
     return builder_.CreateStructGEP(tt, base, t->index, "telemptr");
+  }
+  case Expr::Kind::Index: {
+    auto *ix = static_cast<const IndexExpr *>(e);
+    Value *base = genAddr(ix->base.get());
+    Value *idx = genExpr(ix->index.get());
+    llvm::Type *at = toLLVM(ix->base->type); // [N x T]
+    // GEP {0, idx}: 配列の先頭から idx 番目の要素アドレス (境界チェックなし)
+    Value *zero = ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0);
+    return builder_.CreateGEP(at, base, {zero, idx}, "elemptr");
   }
   default:
     break;

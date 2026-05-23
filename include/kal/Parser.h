@@ -31,6 +31,7 @@ private:
   ExprPtr parseIfExpr();
   ExprPtr parseForExpr();
   ExprPtr parseMatchExpr();
+  ExprPtr parseArrayExpr();
   ExprPtr parseBlock();
 
   bool parseType(Type &out); // 型を 1 つ読む (組み込み型/struct名/タプル)

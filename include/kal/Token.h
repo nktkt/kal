@@ -48,8 +48,10 @@ enum class Tok {
   Amp,      // &
   LParen,
   RParen,
-  LBrace, // {
-  RBrace, // }
+  LBrace,   // {
+  RBrace,   // }
+  LBracket, // [
+  RBracket, // ]
   Comma,
   Semicolon,
   Unknown,

@@ -50,6 +50,8 @@ private:
   Type checkDeref(DerefExpr *e);
   Type checkBlock(BlockExpr *e, std::optional<Type> expected);
   Type checkAssign(AssignExpr *e);
+  Type checkArrayLit(ArrayLitExpr *e, std::optional<Type> expected);
+  Type checkIndex(IndexExpr *e);
   // 代入先 / &mut で借用できる「可変な場所」か
   bool isMutablePlace(const Expr *e);
 

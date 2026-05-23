@@ -1,0 +1,6 @@
+error[E0191]: 配列要素の型が一致しません (i32 と f64)
+ --> tests/diagnostics/array_element_mismatch.kal:2:5
+  |
+2 | [1, 2.0];
+  |     ^^^
+1 個のエラーで中断しました

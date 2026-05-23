@@ -67,6 +67,31 @@ bool Parser::parseType(Type &out) {
     out = Type::refTy(pointee, mut);
     return true;
   }
+  // 配列型:  [T; N]
+  if (cur_.kind == Tok::LBracket) {
+    advance();
+    Type elem;
+    if (!parseType(elem))
+      return false;
+    if (cur_.kind != Tok::Semicolon) {
+      diag_.error(cur_.span, "E0033", "配列型は '[T; N]' の形式です (';' が必要)");
+      return false;
+    }
+    advance();
+    if (cur_.kind != Tok::Number || cur_.isFloat) {
+      diag_.error(cur_.span, "E0034", "配列の長さには整数リテラルが必要です");
+      return false;
+    }
+    unsigned len = static_cast<unsigned>(cur_.intValue);
+    advance();
+    if (cur_.kind != Tok::RBracket) {
+      diag_.error(cur_.span, "E0035", "配列型には ']' が必要です");
+      return false;
+    }
+    advance();
+    out = Type::arrayTy(elem, len);
+    return true;
+  }
   // タプル型 / unit / 括弧:  ()  (T)  (T1, T2, ...)
   if (cur_.kind == Tok::LParen) {
     advance();
@@ -316,6 +341,8 @@ ExprPtr Parser::parsePrimary() {
     return parseForExpr();
   case Tok::Match:
     return parseMatchExpr();
+  case Tok::LBracket:
+    return parseArrayExpr();
   case Tok::LBrace:
     return parseBlock();
   default:
@@ -386,6 +413,22 @@ ExprPtr Parser::parseUnary() {
                     "'.' の後にはフィールド名かタプル番号が必要です");
         return nullptr;
       }
+    } else if (cur_.kind == Tok::LBracket) {
+      advance(); // '['
+      bool savedNSL = noStructLit_;
+      noStructLit_ = false; // 添字の中では構造体リテラル可
+      auto idx = parseExpression();
+      noStructLit_ = savedNSL;
+      if (!idx)
+        return nullptr;
+      if (cur_.kind != Tok::RBracket) {
+        diag_.error(cur_.span, "E0037", "添字アクセスには ']' が必要です");
+        return nullptr;
+      }
+      Span end = cur_.span;
+      advance(); // ']'
+      Span full{e->span.fileId, e->span.start, end.end};
+      e = std::make_unique<IndexExpr>(full, std::move(e), std::move(idx));
     } else if (cur_.kind == Tok::As) {
       advance();
       Span typeSpan = cur_.span;
@@ -564,6 +607,41 @@ ExprPtr Parser::parseMatchExpr() {
   advance(); // '}'
   me->span = {s.fileId, s.start, end.end};
   return me;
+}
+
+// 配列リテラル: `[e1, e2, ...]` (末尾カンマ可)
+ExprPtr Parser::parseArrayExpr() {
+  Span s = cur_.span;
+  advance(); // '['
+  bool savedNSL = noStructLit_;
+  noStructLit_ = false; // 要素の中では構造体リテラル可
+  std::vector<ExprPtr> elems;
+  if (cur_.kind != Tok::RBracket) {
+    for (;;) {
+      auto el = parseExpression();
+      if (!el) {
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+      elems.push_back(std::move(el));
+      if (cur_.kind == Tok::RBracket)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0036",
+                    "配列要素の後には ',' か ']' が必要です");
+        noStructLit_ = savedNSL;
+        return nullptr;
+      }
+      advance(); // ','
+      if (cur_.kind == Tok::RBracket)
+        break; // 末尾カンマを許可
+    }
+  }
+  Span end = cur_.span;
+  advance(); // ']'
+  noStructLit_ = savedNSL;
+  return std::make_unique<ArrayLitExpr>(Span{s.fileId, s.start, end.end},
+                                        std::move(elems));
 }
 
 ExprPtr Parser::parseBinOpRHS(int exprPrec, ExprPtr lhs) {

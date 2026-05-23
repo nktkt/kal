@@ -10,14 +10,15 @@ namespace kal {
 /// Kal の型。整数・浮動小数点・bool・unit に加え、struct (公称) と tuple (構造的)。
 struct Type {
   enum class Kind {
-    Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref
+    Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref, Array
   };
   Kind kind = Kind::Unknown;
   unsigned bits = 0;        // Int: 8/16/32/64, Float: 32/64, Bool: 1
   bool isSigned = true;     // Int のみ
   bool refMut = false;      // Ref が &mut か
+  unsigned arrayLen = 0;    // Array の要素数
   std::string name;         // Struct / Enum の名前
-  std::vector<Type> elems;  // Tuple の要素型 / Ref の指す型(elems[0])
+  std::vector<Type> elems;  // Tuple の要素型 / Ref の指す型 / Array の要素型(elems[0])
 
   static Type unknown() { return {}; }
   static Type unit() { return {Kind::Unit, 0, true}; }
@@ -49,6 +50,13 @@ struct Type {
     t.elems.push_back(std::move(pointee));
     return t;
   }
+  static Type arrayTy(Type elem, unsigned len) {
+    Type t;
+    t.kind = Kind::Array;
+    t.arrayLen = len;
+    t.elems.push_back(std::move(elem));
+    return t;
+  }
 
   bool isInt() const { return kind == Kind::Int; }
   bool isFloat() const { return kind == Kind::Float; }
@@ -58,9 +66,11 @@ struct Type {
   bool isTuple() const { return kind == Kind::Tuple; }
   bool isEnum() const { return kind == Kind::Enum; }
   bool isRef() const { return kind == Kind::Ref; }
+  bool isArray() const { return kind == Kind::Array; }
   bool isNumeric() const { return isInt() || isFloat(); }
   bool isKnown() const { return kind != Kind::Unknown; }
-  const Type &pointee() const { return elems[0]; } // Ref のとき有効
+  const Type &pointee() const { return elems[0]; }   // Ref のとき有効
+  const Type &elemType() const { return elems[0]; }  // Array のとき有効
 
   bool operator==(const Type &o) const {
     if (kind != o.kind)
@@ -77,6 +87,8 @@ struct Type {
       return elems == o.elems; // 構造的
     case Kind::Ref:
       return refMut == o.refMut && elems[0] == o.elems[0];
+    case Kind::Array:
+      return arrayLen == o.arrayLen && elems[0] == o.elems[0];
     default:
       return true;
     }

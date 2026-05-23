@@ -17,6 +17,8 @@ bool MoveCheck::isCopy(const Type &t) const {
     return true;
   case Type::Kind::Ref:
     return !t.refMut; // &T はコピー、&mut T はムーブ
+  case Type::Kind::Array:
+    return isCopy(t.elems[0]); // 要素が Copy なら配列も Copy
   default:
     return false; // Struct / Enum / Tuple
   }
@@ -45,6 +47,12 @@ void MoveCheck::requireLive(const Expr *e) {
   case Expr::Kind::TupleIndex:
     requireLive(static_cast<const TupleIndexExpr *>(e)->operand.get());
     return;
+  case Expr::Kind::Index: {
+    auto *ix = static_cast<const IndexExpr *>(e);
+    use(ix->index.get()); // 添字値は評価される
+    requireLive(ix->base.get());
+    return;
+  }
   case Expr::Kind::Deref:
     requireLive(static_cast<const DerefExpr *>(e)->operand.get());
     return;
@@ -101,6 +109,21 @@ void MoveCheck::use(const Expr *e) {
     auto *t = static_cast<const TupleLitExpr *>(e);
     for (auto &el : t->elems)
       use(el.get());
+    return;
+  }
+  case Expr::Kind::ArrayLit: {
+    auto *a = static_cast<const ArrayLitExpr *>(e);
+    for (auto &el : a->elems)
+      use(el.get());
+    return;
+  }
+  case Expr::Kind::Index: {
+    auto *ix = static_cast<const IndexExpr *>(e);
+    use(ix->index.get()); // 添字値は評価される
+    if (isCopy(e->type))
+      requireLive(ix->base.get()); // Copy 要素の読みはムーブしない
+    else
+      use(ix->base.get()); // 非 Copy 要素 → ベース全体をムーブ (保守的)
     return;
   }
   case Expr::Kind::Field: {

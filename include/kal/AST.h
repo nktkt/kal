@@ -31,6 +31,8 @@ struct Expr {
     Block,
     Assign,
     Unary,
+    ArrayLit,
+    Index,
   };
   Kind kind;
   Span span;
@@ -162,6 +164,21 @@ struct DerefExpr : Expr {
   ExprPtr operand;
   DerefExpr(Span s, ExprPtr operand)
       : Expr(Kind::Deref, s), operand(std::move(operand)) {}
+};
+
+/// 配列リテラル: `[e1, e2, ...]` (要素は同じ型・要素数 >= 1)
+struct ArrayLitExpr : Expr {
+  std::vector<ExprPtr> elems;
+  ArrayLitExpr(Span s, std::vector<ExprPtr> elems)
+      : Expr(Kind::ArrayLit, s), elems(std::move(elems)) {}
+};
+
+/// 添字アクセス: `base[index]` (読み書き両用)
+struct IndexExpr : Expr {
+  ExprPtr base;
+  ExprPtr index;
+  IndexExpr(Span s, ExprPtr base, ExprPtr index)
+      : Expr(Kind::Index, s), base(std::move(base)), index(std::move(index)) {}
 };
 
 /// 単項演算: `-operand` (Tok::Minus) または `!operand` (Tok::Bang)

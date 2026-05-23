@@ -22,7 +22,8 @@ const EnumDef *Sema::findEnum(const std::string &name) const {
 Type Sema::resolve(Type t) const {
   if (t.kind == Type::Kind::Struct && findEnum(t.name))
     t.kind = Type::Kind::Enum; // パーサが Struct と誤判定した enum 名を直す
-  else if (t.kind == Type::Kind::Tuple || t.kind == Type::Kind::Ref)
+  else if (t.kind == Type::Kind::Tuple || t.kind == Type::Kind::Ref ||
+           t.kind == Type::Kind::Array)
     for (auto &e : t.elems)
       e = resolve(e);
   return t;
@@ -66,7 +67,7 @@ bool Sema::run(Program &program) {
       return findStruct(t.name) != nullptr;
     if (t.isEnum())
       return findEnum(t.name) != nullptr;
-    if (t.isRef())
+    if (t.isRef() || t.isArray())
       return knownType(t.elems[0]);
     if (t.isTuple()) {
       for (auto &e : t.elems)
@@ -183,6 +184,12 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     break;
   case Expr::Kind::Unary:
     t = checkUnary(static_cast<UnaryExpr *>(e), expected);
+    break;
+  case Expr::Kind::ArrayLit:
+    t = checkArrayLit(static_cast<ArrayLitExpr *>(e), expected);
+    break;
+  case Expr::Kind::Index:
+    t = checkIndex(static_cast<IndexExpr *>(e));
     break;
   }
   e->type = t;
@@ -506,6 +513,8 @@ bool Sema::isMutablePlace(const Expr *e) {
     return isMutablePlace(static_cast<const FieldExpr *>(e)->operand.get());
   case Expr::Kind::TupleIndex:
     return isMutablePlace(static_cast<const TupleIndexExpr *>(e)->operand.get());
+  case Expr::Kind::Index:
+    return isMutablePlace(static_cast<const IndexExpr *>(e)->base.get());
   default:
     return false;
   }
@@ -564,6 +573,48 @@ Type Sema::checkAssign(AssignExpr *e) {
                 "代入の型が一致しません (左辺 " + tt.str() + ", 右辺 " + vt.str() +
                     ")");
   return Type::unit();
+}
+
+Type Sema::checkArrayLit(ArrayLitExpr *e, std::optional<Type> expected) {
+  std::optional<Type> elemHint;
+  if (expected && expected->isArray())
+    elemHint = expected->elemType();
+
+  if (e->elems.empty()) {
+    if (elemHint)
+      return Type::arrayTy(*elemHint, 0);
+    diag_.error(e->span, "E0190",
+                "空の配列リテラルからは要素型を推論できません (型注釈が必要です)");
+    return Type::unknown();
+  }
+
+  Type elemT = check(e->elems[0].get(), elemHint);
+  for (size_t i = 1; i < e->elems.size(); ++i) {
+    std::optional<Type> hint =
+        elemT.isKnown() ? std::optional<Type>(elemT) : elemHint;
+    Type t = check(e->elems[i].get(), hint);
+    if (t.isKnown() && elemT.isKnown() && t != elemT)
+      diag_.error(e->elems[i]->span, "E0191",
+                  "配列要素の型が一致しません (" + elemT.str() + " と " + t.str() +
+                      ")");
+  }
+  return Type::arrayTy(elemT, static_cast<unsigned>(e->elems.size()));
+}
+
+Type Sema::checkIndex(IndexExpr *e) {
+  Type bt = check(e->base.get(), std::nullopt);
+  Type it = check(e->index.get(), Type::intTy(64, true));
+  if (it.isKnown() && !it.isInt())
+    diag_.error(e->index->span, "E0192",
+                "添字には整数型が必要です (実際 " + it.str() + ")");
+  if (!bt.isArray()) {
+    if (bt.isKnown())
+      diag_.error(e->base->span, "E0193",
+                  "配列ではないものに添字アクセスしています (実際 " + bt.str() +
+                      ")");
+    return Type::unknown();
+  }
+  return bt.elemType();
 }
 
 Type Sema::checkBorrow(BorrowExpr *e, std::optional<Type> expected) {

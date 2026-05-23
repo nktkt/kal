@@ -5,6 +5,10 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Arrays:** fixed-length arrays `[T; N]`, array literals `[e1, …, eN]`, and
+  indexing `a[i]` (read and write). Arrays nest (`[[i64; 2]; 2]`) and are `Copy`
+  when their element type is (numbers, `bool`); otherwise they move. Indexing is
+  **not** bounds-checked yet (a future addition).
 - **Operators:** `==` `!=` `<=` `>=`, remainder `%`, unary `-` and `!`, and
   short-circuiting `&&` / `||`. `==`/`!=` work on numbers and `bool`; logical
   operators take `bool`. Float comparisons are now ordered.

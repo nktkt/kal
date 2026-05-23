@@ -71,8 +71,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 
 ### Types
 `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), user-defined
-**`struct`s**, **`enum`s** (algebraic data types), **tuples** `(T, U, …)`, and
-**references** `&T` / `&mut T`.
+**`struct`s**, **`enum`s** (algebraic data types), **tuples** `(T, U, …)`,
+**arrays** `[T; N]`, and **references** `&T` / `&mut T`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 There are **no implicit conversions** — convert explicitly with `as`.
@@ -139,6 +139,23 @@ Point { x: 3.0, y: 4.0 }.x;         # => 3
 ```
 
 Structs and tuples are value types (passed/returned by value).
+
+### Arrays
+
+```
+let xs: [i64; 4] = [10, 20, 30, 40];   # fixed-length [T; N], array literal [..]
+xs[2];                                  # => 30   (indexing reads an element)
+xs[0] = 99;                             # write through an index (needs `let mut`)
+
+let grid: [[i64; 2]; 2] = [[1, 2], [3, 4]];   # arrays nest
+grid[1][0];                             # => 3
+```
+
+A `[T; N]` is `N` contiguous elements of `T`. All elements of a literal share one
+type, and `[T; N]` is `Copy` when `T` is (numbers, `bool`); otherwise it moves
+like a struct. Indexing `a[i]` reads or writes (the latter needs a `mut` binding
+or `&mut`); the index is any integer. Indexing is **not** bounds-checked yet — an
+out-of-range index is undefined behavior (a planned addition).
 
 ### Blocks, `let` & mutation
 
@@ -237,7 +254,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

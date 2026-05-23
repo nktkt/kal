@@ -1,0 +1,2 @@
+# All elements of an array literal must have the same type.
+[1, 2.0];
