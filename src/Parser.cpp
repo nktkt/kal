@@ -835,6 +835,27 @@ std::unique_ptr<StructDef> Parser::parseStructDef() {
   sd->nameSpan = cur_.span;
   advance();
 
+  // 型引数:  <P1, P2, ...>  (省略時は非総称)
+  if (cur_.kind == Tok::Less) {
+    advance();
+    for (;;) {
+      if (cur_.kind != Tok::Identifier) {
+        diag_.error(cur_.span, "E0087", "型引数名が必要です");
+        return nullptr;
+      }
+      sd->typeParams.push_back(cur_.text);
+      advance();
+      if (cur_.kind == Tok::Greater)
+        break;
+      if (cur_.kind != Tok::Comma) {
+        diag_.error(cur_.span, "E0088", "型引数には ',' か '>' が必要です");
+        return nullptr;
+      }
+      advance();
+    }
+    advance(); // '>'
+  }
+
   if (cur_.kind != Tok::LBrace) {
     diag_.error(cur_.span, "E0041", "構造体には '{' が必要です");
     return nullptr;

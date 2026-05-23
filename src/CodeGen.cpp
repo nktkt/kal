@@ -46,7 +46,7 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
   case kal::Type::Kind::Unit:
     return llvm::Type::getVoidTy(ctx_);
   case kal::Type::Kind::Struct:
-    return getStructType(t.name);
+    return getStructType(t);
   case kal::Type::Kind::Enum:
     return getEnumType(t);
   case kal::Type::Kind::Param:
@@ -71,16 +71,22 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &t) {
   return nullptr;
 }
 
-StructType *CodeGen::getStructType(const std::string &name) {
-  auto it = structTypes_.find(name);
+StructType *CodeGen::getStructType(const kal::Type &structType) {
+  std::string mangled = structType.str(); // "Point" / "Pair<i64, f64>" など
+  auto it = structTypes_.find(mangled);
   if (it != structTypes_.end())
     return it->second;
-  const StructDef *sd = structDefs_[name];
+  const StructDef *sd = structDefs_[structType.name];
+  // 型引数 → 具体型の対応 (非総称なら空)
+  std::map<std::string, kal::Type> subst;
+  for (size_t i = 0; i < sd->typeParams.size() && i < structType.elems.size();
+       ++i)
+    subst[sd->typeParams[i]] = structType.elems[i];
   std::vector<llvm::Type *> fieldTys;
   for (auto &f : sd->fields)
-    fieldTys.push_back(toLLVM(f.type));
-  StructType *st = StructType::create(ctx_, fieldTys, name);
-  structTypes_[name] = st;
+    fieldTys.push_back(toLLVM(substType(f.type, subst)));
+  StructType *st = StructType::create(ctx_, fieldTys, mangled);
+  structTypes_[mangled] = st;
   return st;
 }
 
@@ -184,7 +190,7 @@ Value *CodeGen::genExpr(const Expr *e) {
 
 Value *CodeGen::genStructLit(const StructLitExpr *e) {
   const StructDef *sd = structDefs_[e->structName];
-  StructType *st = getStructType(e->structName);
+  StructType *st = getStructType(e->type); // 具体化されたインスタンス型
   Value *agg = UndefValue::get(st);
   // 宣言順に、対応する初期化式を探して詰める
   for (size_t i = 0; i < sd->fields.size(); ++i) {
@@ -405,7 +411,7 @@ Value *CodeGen::genAddr(const Expr *e) {
   case Expr::Kind::Field: {
     auto *f = static_cast<const FieldExpr *>(e);
     Value *base = genAddr(f->operand.get());
-    StructType *st = getStructType(f->operand->type.name);
+    StructType *st = getStructType(f->operand->type);
     return builder_.CreateStructGEP(st, base,
                                     static_cast<unsigned>(f->fieldIndex),
                                     "fieldptr");

@@ -1,0 +1,29 @@
+# ジェネリックな struct: enum と同じく単態化される。
+# 型引数は構築時にフィールド値と期待型から推論される。
+
+struct Pair<A, B> { first: A, second: B }
+
+fn swap_sum(p: Pair<i64, i64>) -> i64 = p.first + p.second;
+
+# 異なる具体化を同一プログラムで併用 (Pair<i64,i64> と Pair<i64,f64>)。
+printi(swap_sum(Pair { first: 3, second: 4 }));   # => 7
+printd(Pair { first: 1, second: 2.5 }.second);    # => 2.5
+
+# ネスト: ジェネリック struct がジェネリック enum を保持する。
+struct Box<T> { value: T }
+
+fn unbox_or(b: Box<Option<i64>>, dflt: i64) -> i64 =
+  match b.value {
+    Some(x) => x,
+    None    => dflt,
+  };
+
+printi(unbox_or(Box { value: Some(42) }, -1));   # => 42
+printi(unbox_or(Box { value: None }, -1));       # => -1
+
+# フィールドの書き換え (let mut が必要)。
+{
+  let mut p: Pair<i64, i64> = Pair { first: 10, second: 20 };
+  p.first = p.first + p.second;     # 30
+  printi(p.first);                  # => 30
+};

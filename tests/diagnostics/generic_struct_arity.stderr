@@ -1,0 +1,6 @@
+error[E0046]: 未定義または不正な型です: Pair<i64>
+ --> tests/diagnostics/generic_struct_arity.kal:3:4
+  |
+3 | fn f(p: Pair<i64>) -> i64 = 0;
+  |    ^^^^^^^^^^^^^^^
+1 個のエラーで中断しました

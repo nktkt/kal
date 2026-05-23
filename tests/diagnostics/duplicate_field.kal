@@ -1,0 +1,4 @@
+# Specifying the same field twice is an error (and would otherwise leave
+# another field uninitialized).
+struct P { a: i64, b: i64 }
+P { a: 1, a: 2 };

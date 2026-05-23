@@ -71,9 +71,9 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 
 ### Types
 `i8 i16 i32 i64`, `u8 u16 u32 u64`, `f32 f64`, `bool`, `()` (unit), user-defined
-**`struct`s**, **`enum`s** (algebraic data types, optionally **generic** —
-`enum Name<T> { … }`, with `Option<T>` / `Result<T, E>` built in), **tuples**
-`(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`, and
+**`struct`s** and **`enum`s** (algebraic data types) — both optionally
+**generic** (`Name<T, …>`, with `Option<T>` / `Result<T, E>` built in) —
+**tuples** `(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`, and
 **references** `&T` / `&mut T`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
@@ -225,10 +225,16 @@ pattern (`_` ignores one).
 
 ### Generics & `Option` / `Result`
 
-Enums can be **generic** over types: `enum Name<T, …> { … }`. Each concrete use
-is *monomorphized* (a separate type is generated per instantiation). Type
-arguments are written `Name<T1, …>` and are **inferred** at construction from the
-payload and the expected type — no turbofish needed.
+Enums and structs can be **generic** over types: `enum Name<T, …> { … }` /
+`struct Name<T, …> { … }`. Each concrete use is *monomorphized* (a separate type
+is generated per instantiation). Type arguments are written `Name<T1, …>` and are
+**inferred** at construction from the payload/fields and the expected type — no
+turbofish needed.
+
+```
+struct Pair<A, B> { first: A, second: B }    # generic struct
+Pair { first: 3, second: 4.0 }.second;        # => 4   (Pair<i32, f64>)
+```
 
 `Option<T>` and `Result<T, E>` come built in (a prelude), so `Some`/`None` and
 `Ok`/`Err` are always available:
@@ -250,8 +256,10 @@ enum Result<T, E> { Ok(T), Err(E) }
 ```
 
 Type arguments must be supplied where they can't be inferred (e.g. a bare `None`
-needs a `: Option<i64>` annotation or a typed context). Generic *functions* and
-generic *structs* are not implemented yet (see [ROADMAP.md](ROADMAP.md)).
+needs a `: Option<i64>` annotation or a typed context). A by-value recursive type
+(e.g. `enum List<T> { Cons(T, List<T>), Nil }`) has infinite size and is rejected
+— it needs indirection (a reference/slice). Generic *functions* are not
+implemented yet (see [ROADMAP.md](ROADMAP.md)).
 
 ### References
 
@@ -313,7 +321,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

@@ -106,9 +106,11 @@ bool Sema::run(Program &program) {
   }
 
   // (2) 注釈された型を解決 (enum 名を Struct→Enum に直す)
-  for (auto &sd : program.structs)
+  for (auto &sd : program.structs) {
+    std::set<std::string> params(sd->typeParams.begin(), sd->typeParams.end());
     for (auto &f : sd->fields)
-      f.type = resolve(f.type);
+      f.type = resolve(bindParams(f.type, params)); // 型引数名を Param へ
+  }
   for (auto &ed : program.enums) {
     std::set<std::string> params(ed->typeParams.begin(), ed->typeParams.end());
     for (auto &v : ed->variants)
@@ -132,8 +134,15 @@ bool Sema::run(Program &program) {
   std::function<bool(const Type &)> knownType = [&](const Type &t) -> bool {
     if (t.isParam())
       return true; // 型変数は常に妥当
-    if (t.isStruct())
-      return findStruct(t.name) != nullptr && t.elems.empty();
+    if (t.isStruct()) {
+      const StructDef *sd = findStruct(t.name);
+      if (!sd || t.elems.size() != sd->typeParams.size())
+        return false; // struct 不在、または型引数の数が合わない
+      for (auto &a : t.elems)
+        if (!knownType(a))
+          return false;
+      return true;
+    }
     if (t.isEnum()) {
       const EnumDef *ed = findEnum(t.name);
       if (!ed || t.elems.size() != ed->typeParams.size())
@@ -294,7 +303,7 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
     t = checkCast(static_cast<CastExpr *>(e));
     break;
   case Expr::Kind::StructLit:
-    t = checkStructLit(static_cast<StructLitExpr *>(e));
+    t = checkStructLit(static_cast<StructLitExpr *>(e), expected);
     break;
   case Expr::Kind::Field:
     t = checkField(static_cast<FieldExpr *>(e));
@@ -627,7 +636,7 @@ Type Sema::checkCast(CastExpr *e) {
   return dst;
 }
 
-Type Sema::checkStructLit(StructLitExpr *e) {
+Type Sema::checkStructLit(StructLitExpr *e, std::optional<Type> expected) {
   const StructDef *sd = findStruct(e->structName);
   if (!sd) {
     diag_.error(e->nameSpan, "E0060", "未定義の構造体です: " + e->structName);
@@ -640,26 +649,87 @@ Type Sema::checkStructLit(StructLitExpr *e) {
                 "フィールド数が一致しません (期待 " +
                     std::to_string(sd->fields.size()) + ", 実際 " +
                     std::to_string(e->fieldValues.size()) + ")");
-  for (size_t i = 0; i < e->fieldValues.size(); ++i) {
-    const StructField *decl = nullptr;
+
+  // 同じフィールドの重複指定を弾く。重複を許すと個数一致のまま別フィールドが
+  // 欠落し、CodeGen で未初期化 (nullptr) になりクラッシュする。
+  for (size_t i = 0; i < e->fieldNames.size(); ++i)
+    for (size_t j = i + 1; j < e->fieldNames.size(); ++j)
+      if (e->fieldNames[i] == e->fieldNames[j])
+        diag_.error(e->fieldValues[j]->span, "E0068",
+                    "フィールド '" + e->fieldNames[j] +
+                        "' が重複して指定されています");
+
+  auto findDecl = [&](const std::string &n) -> const StructField * {
     for (auto &f : sd->fields)
-      if (f.name == e->fieldNames[i]) {
-        decl = &f;
-        break;
+      if (f.name == n)
+        return &f;
+    return nullptr;
+  };
+
+  // 非総称: 従来どおりフィールド型で検査
+  if (sd->typeParams.empty()) {
+    for (size_t i = 0; i < e->fieldValues.size(); ++i) {
+      const StructField *decl = findDecl(e->fieldNames[i]);
+      if (!decl) {
+        diag_.error(e->fieldValues[i]->span, "E0062",
+                    "そのようなフィールドはありません: " + e->fieldNames[i]);
+        check(e->fieldValues[i].get(), std::nullopt);
+        continue;
       }
+      Type ft = check(e->fieldValues[i].get(), decl->type);
+      if (ft.isKnown() && ft != decl->type)
+        diag_.error(e->fieldValues[i]->span, "E0063",
+                    "フィールド '" + decl->name + "' の型が一致しません (期待 " +
+                        decl->type.str() + ", 実際 " + ft.str() + ")");
+    }
+    return Type::structTy(e->structName);
+  }
+
+  // ジェネリック: 期待型 + フィールド値から型引数を推論する
+  std::map<std::string, Type> subst;
+  if (expected && expected->isStruct() && expected->name == e->structName &&
+      expected->elems.size() == sd->typeParams.size())
+    for (size_t i = 0; i < sd->typeParams.size(); ++i)
+      subst[sd->typeParams[i]] = expected->elems[i];
+  for (size_t i = 0; i < e->fieldValues.size(); ++i) {
+    const StructField *decl = findDecl(e->fieldNames[i]);
     if (!decl) {
       diag_.error(e->fieldValues[i]->span, "E0062",
                   "そのようなフィールドはありません: " + e->fieldNames[i]);
       check(e->fieldValues[i].get(), std::nullopt);
       continue;
     }
-    Type ft = check(e->fieldValues[i].get(), decl->type);
-    if (ft.isKnown() && ft != decl->type)
+    Type hint = substType(decl->type, subst);
+    Type ft = check(e->fieldValues[i].get(),
+                    hasParam(hint) ? std::nullopt : std::optional<Type>(hint));
+    unifyParam(decl->type, ft, subst);
+  }
+  std::vector<Type> args;
+  for (auto &p : sd->typeParams) {
+    auto sit = subst.find(p);
+    if (sit == subst.end()) {
+      diag_.error(e->span, "E0097",
+                  "型引数を推論できません: " + e->structName + " の " + p +
+                      " (型注釈が必要です)");
+      return Type::unknown();
+    }
+    args.push_back(sit->second);
+  }
+  // 解決後のフィールド型で各値を再検証
+  for (size_t i = 0; i < e->fieldValues.size(); ++i) {
+    const StructField *decl = findDecl(e->fieldNames[i]);
+    if (!decl)
+      continue;
+    Type want = substType(decl->type, subst);
+    if (e->fieldValues[i]->type.isKnown() && e->fieldValues[i]->type != want)
       diag_.error(e->fieldValues[i]->span, "E0063",
                   "フィールド '" + decl->name + "' の型が一致しません (期待 " +
-                      decl->type.str() + ", 実際 " + ft.str() + ")");
+                      want.str() + ", 実際 " + e->fieldValues[i]->type.str() +
+                      ")");
   }
-  return Type::structTy(e->structName);
+  Type t = Type::structTy(e->structName);
+  t.elems = std::move(args);
+  return t;
 }
 
 Type Sema::checkField(FieldExpr *e) {
@@ -674,10 +744,15 @@ Type Sema::checkField(FieldExpr *e) {
   const StructDef *sd = findStruct(ot.name);
   if (!sd)
     return Type::unknown();
+  // ジェネリックなら型引数でフィールド型を具体化する
+  std::map<std::string, Type> subst;
+  if (!sd->typeParams.empty() && ot.elems.size() == sd->typeParams.size())
+    for (size_t i = 0; i < sd->typeParams.size(); ++i)
+      subst[sd->typeParams[i]] = ot.elems[i];
   for (size_t i = 0; i < sd->fields.size(); ++i)
     if (sd->fields[i].name == e->field) {
       e->fieldIndex = static_cast<int>(i);
-      return sd->fields[i].type;
+      return substType(sd->fields[i].type, subst);
     }
   diag_.error(e->fieldSpan, "E0065",
               "構造体 " + ot.name + " にフィールド '" + e->field +

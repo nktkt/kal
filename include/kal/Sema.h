@@ -43,7 +43,7 @@ private:
   Type checkIf(IfExpr *e, std::optional<Type> expected);
   Type checkFor(ForExpr *e);
   Type checkCast(CastExpr *e);
-  Type checkStructLit(StructLitExpr *e);
+  Type checkStructLit(StructLitExpr *e, std::optional<Type> expected);
   Type checkField(FieldExpr *e);
   Type checkTupleLit(TupleLitExpr *e, std::optional<Type> expected);
   Type checkTupleIndex(TupleIndexExpr *e);

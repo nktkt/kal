@@ -262,10 +262,12 @@ struct StructField {
   Span span;
 };
 
-/// 構造体定義: `struct Name { f: T, ... }`
+/// 構造体定義: `struct Name<P, ...> { f: T, ... }`
+/// typeParams が空でなければジェネリック (使用箇所ごとに単態化される)。
 struct StructDef {
   std::string name;
   Span nameSpan;
+  std::vector<std::string> typeParams; // ジェネリックな型引数名 (空なら非総称)
   std::vector<StructField> fields;
   Span span;
 };

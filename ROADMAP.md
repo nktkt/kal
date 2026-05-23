@@ -128,9 +128,10 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
 - *Exit:* memory-safe **without GC**; use-after-move, double-free, and aliasing violations are compile errors.
 
 #### Phase 4 — Generics & traits · **L** · → v0.6
-- Generic types via **monomorphization** — ✅ **generic enums done** (`Option<T>`,
-  `Result<T, E>` ship as a prelude; type args inferred at construction). Generic
-  **functions** and generic **structs** are still to do.
+- Generic types via **monomorphization** — ✅ **generic enums & structs done**
+  (`Option<T>`, `Result<T, E>` ship as a prelude; type args inferred at
+  construction; infinite-size recursive types rejected). Generic **functions**
+  are still to do.
 - **Traits** (interfaces / typeclasses) with bounds; associated types.
 - Static dispatch by default; trait objects (dynamic dispatch) where needed.
 - *Exit:* write reusable generic data structures (`Vec<T>`, `Map<K,V>`).

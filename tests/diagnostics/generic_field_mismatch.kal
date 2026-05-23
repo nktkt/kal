@@ -1,0 +1,3 @@
+# Wrap<i64> needs an i64 field value; 1.5 (f64) does not fit.
+struct Wrap<T> { v: T }
+fn f() -> Wrap<i64> = Wrap { v: 1.5 };

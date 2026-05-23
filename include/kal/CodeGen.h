@@ -56,7 +56,8 @@ private:
   llvm::Value *genVariant(const Type &enumType, int tag,
                           llvm::ArrayRef<llvm::Value *> payload);
 
-  llvm::StructType *getStructType(const std::string &name); // 名前→LLVM構造体型
+  // 具体化された struct 型 (型引数つき) → LLVM 構造体型 (単態化)
+  llvm::StructType *getStructType(const Type &structType);
   // 具体化された enum 型 (型引数つき) → タグ付き共用体 (単態化)
   llvm::StructType *getEnumType(const Type &enumType);
   llvm::Function *declareProto(const Prototype &p);

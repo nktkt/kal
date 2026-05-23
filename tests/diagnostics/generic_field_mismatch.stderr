@@ -1,0 +1,6 @@
+error[E0063]: フィールド 'v' の型が一致しません (期待 i64, 実際 f64)
+ --> tests/diagnostics/generic_field_mismatch.kal:3:33
+  |
+3 | fn f() -> Wrap<i64> = Wrap { v: 1.5 };
+  |                                 ^^^
+1 個のエラーで中断しました

@@ -1,0 +1,6 @@
+error[E0068]: フィールド 'a' が重複して指定されています
+ --> tests/diagnostics/duplicate_field.kal:4:14
+  |
+4 | P { a: 1, a: 2 };
+  |              ^
+1 個のエラーで中断しました
