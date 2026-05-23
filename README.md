@@ -77,6 +77,7 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 **references** `&T` / `&mut T`.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
+Boolean literals are `true` and `false`.
 There are **no implicit conversions** — convert explicitly with `as`.
 
 ### Operators (highest precedence first)
@@ -156,8 +157,9 @@ grid[1][0];                             # => 3
 A `[T; N]` is `N` contiguous elements of `T`. All elements of a literal share one
 type, and `[T; N]` is `Copy` when `T` is (numbers, `bool`); otherwise it moves
 like a struct. Indexing `a[i]` reads or writes (the latter needs a `mut` binding
-or `&mut`); the index is any integer. Indexing is **not** bounds-checked yet — an
-out-of-range index is undefined behavior (a planned addition).
+or `&mut`); the index is any integer. Indexing is **bounds-checked**: an
+out-of-range or negative index aborts with a panic (optimized builds drop checks
+that are provably in range).
 
 ### Slices
 
@@ -181,8 +183,8 @@ fn fill(s: &mut [i64], v: i64) = {  # &mut [T] can write through the slice
 ```
 
 `len(s)` returns the slice's length as `i64`. `s[i]` reads (or, through a
-`&mut [T]`, writes) the i-th element; like array indexing it is **not**
-bounds-checked yet. `&[T]` is `Copy` (like `&T`); `&mut [T]` moves (like
+`&mut [T]`, writes) the i-th element; like array indexing it is bounds-checked.
+`&[T]` is `Copy` (like `&T`); `&mut [T]` moves (like
 `&mut T`). You cannot move a non-`Copy` element out of a slice.
 
 ### Blocks, `let` & mutation
@@ -334,7 +336,7 @@ kal/
 │   ├── MoveCheck.h          #   move semantics / use-after-move
 │   └── CodeGen.h            #   typed AST → LLVM IR
 ├── src/                     # implementations + main.cpp (JIT driver)
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool
 ├── tests/                   # golden-test harness (run_tests.sh) + cases
 └── .github/workflows/ci.yml # build + test on Linux & macOS
 ```

@@ -35,6 +35,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -51,6 +52,10 @@ extern "C" void printi(int64_t x) {
 }
 extern "C" void printd(double x) { std::printf("%g\n", x); }
 extern "C" void putchard(int64_t x) { std::putchar(static_cast<int>(x)); }
+extern "C" void kal_panic() {
+  std::printf("panic: index out of bounds\n");
+  std::exit(1);
+}
 
 //===----------------------------------------------------------------------===//
 
@@ -320,6 +325,8 @@ int main(int argc, char **argv) {
                                           JITSymbolFlags::Exported};
   syms[jit->mangleAndIntern("putchard")] = {
       orc::ExecutorAddr::fromPtr(&putchard), JITSymbolFlags::Exported};
+  syms[jit->mangleAndIntern("kal_panic")] = {
+      orc::ExecutorAddr::fromPtr(&kal_panic), JITSymbolFlags::Exported};
   if (auto err = jit->getMainJITDylib().define(orc::absoluteSymbols(syms))) {
     errs() << "シンボル登録に失敗: " << toString(std::move(err)) << "\n";
     return 1;

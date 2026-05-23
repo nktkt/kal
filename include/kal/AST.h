@@ -33,6 +33,7 @@ struct Expr {
     Unary,
     ArrayLit,
     Index,
+    BoolLit,
   };
   Kind kind;
   Span span;
@@ -41,6 +42,12 @@ struct Expr {
   virtual ~Expr() = default;
 };
 using ExprPtr = std::unique_ptr<Expr>;
+
+/// 真偽値リテラル: `true` / `false`
+struct BoolLitExpr : Expr {
+  bool value;
+  BoolLitExpr(Span s, bool value) : Expr(Kind::BoolLit, s), value(value) {}
+};
 
 /// 数値リテラル。整数か小数かを保持し、型は Sema が文脈から決める。
 struct NumberExpr : Expr {

@@ -1,0 +1,2 @@
+# bool is not numeric: arithmetic on a boolean is a type error.
+true + 1;

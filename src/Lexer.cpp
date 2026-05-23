@@ -74,6 +74,10 @@ Token Lexer::next() {
       k = Tok::Match;
     else if (s == "mut")
       k = Tok::Mut;
+    else if (s == "true")
+      k = Tok::True;
+    else if (s == "false")
+      k = Tok::False;
     t.text = s.str();
     return make(k);
   }

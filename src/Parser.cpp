@@ -368,6 +368,12 @@ ExprPtr Parser::parsePrimary() {
     return parseIdentifierExpr();
   case Tok::Number:
     return parseNumberExpr();
+  case Tok::True:
+  case Tok::False: {
+    auto e = std::make_unique<BoolLitExpr>(cur_.span, cur_.kind == Tok::True);
+    advance();
+    return e;
+  }
   case Tok::LParen:
     return parseParenExpr();
   case Tok::If:

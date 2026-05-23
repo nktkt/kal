@@ -386,6 +386,9 @@ Type Sema::check(Expr *e, std::optional<Type> expected) {
   case Expr::Kind::Index:
     t = checkIndex(static_cast<IndexExpr *>(e));
     break;
+  case Expr::Kind::BoolLit:
+    t = Type::boolean();
+    break;
   }
   e->type = t;
   return t;

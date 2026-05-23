@@ -67,7 +67,8 @@ AOT バイナリは自己完結します（libc/libm のみリンク）。`kalc`
 `Name<T, …>`、`Option<T>` / `Result<T, E>` は組み込み）・タプル `(T, U, …)`・
 **配列** `[T; N]`・**スライス** `&[T]` / `&mut [T]`・**参照** `&T` / `&mut T`。
 整数リテラルの既定は **i32**、小数リテラルは **f64** ですが、文脈から型が決まります
-（例: `n: i64` のとき `n < 2` の `2` は `i64`）。**暗黙変換はなく**、`as` で明示変換します。
+（例: `n: i64` のとき `n < 2` の `2` は `i64`）。真偽値リテラルは `true` / `false`。
+**暗黙変換はなく**、`as` で明示変換します。
 
 ### 演算子（優先順位の高い順）
 
@@ -146,8 +147,8 @@ grid[1][0];                             # => 3
 `[T; N]` は `T` の要素が `N` 個連続したものです。リテラルの全要素は同じ型で、
 `[T; N]` は `T` が `Copy`（数値・`bool`）なら `Copy`、そうでなければ構造体と
 同様にムーブされます。添字 `a[i]` は読み書きでき（書き込みには `mut` 束縛か
-`&mut` が必要）、添字は任意の整数型です。**境界チェックはまだありません**――
-範囲外アクセスは未定義動作です（将来追加予定）。
+`&mut` が必要）、添字は任意の整数型です。**境界チェックされます**――範囲外や
+負の添字は panic で異常終了します（最適化時は範囲内と分かるチェックは除去されます）。
 
 ### スライス
 
@@ -171,7 +172,7 @@ fn fill(s: &mut [i64], v: i64) = {  # &mut [T] はスライス越しに書き込
 ```
 
 `len(s)` はスライスの長さを `i64` で返します。`s[i]` は i 番目の要素を読み
-（`&mut [T]` なら書き）ます――配列の添字と同様、**境界チェックはまだありません**。
+（`&mut [T]` なら書き）ます――配列の添字と同様、**境界チェックされます**。
 `&[T]` は `Copy`（`&T` と同様）、`&mut [T]` はムーブ（`&mut T` と同様）。スライス
 から非 `Copy` の要素をムーブして取り出すことはできません。
 
@@ -318,7 +319,7 @@ kal/
 │   ├── MoveCheck.h          #   ムーブ意味論 / use-after-move
 │   └── CodeGen.h            #   型付き AST → LLVM IR
 ├── src/                     # 実装 + main.cpp（JIT ドライバ）
-├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn
+├── examples/                # arith, fib, loop, extern, cast, struct, enum, ref, mut, move, operators, arrays, slices, option, generic, generic_struct, generic_fn, bool
 ├── tests/                   # ゴールデンテスト（run_tests.sh）
 └── .github/workflows/ci.yml # Linux / macOS でビルド & テスト
 ```

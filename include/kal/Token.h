@@ -22,6 +22,8 @@ enum class Tok {
   Enum,
   Match,
   Mut,
+  True,
+  False,
   // 主要トークン
   Identifier,
   Number,

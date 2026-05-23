@@ -190,6 +190,8 @@ Value *CodeGen::genExpr(const Expr *e) {
     return genArrayLit(static_cast<const ArrayLitExpr *>(e));
   case Expr::Kind::Index:
     return genIndex(static_cast<const IndexExpr *>(e));
+  case Expr::Kind::BoolLit:
+    return builder_.getInt1(static_cast<const BoolLitExpr *>(e)->value);
   }
   return nullptr;
 }
@@ -391,6 +393,22 @@ AllocaInst *CodeGen::entryAlloca(llvm::Type *ty, const std::string &name) {
   return tmp.CreateAlloca(ty, nullptr, name);
 }
 
+// idx が [0, len) の外なら kal_panic を呼ぶ。idx は符号に応じて i64 へ拡張し、
+// 符号なし比較 uge で「負 (巨大な符号なし) も範囲超過も」一度に検出する。
+void CodeGen::emitBoundsCheck(Value *idx, const kal::Type &idxType, Value *len) {
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  Value *idx64 = builder_.CreateIntCast(idx, i64, idxType.isSigned, "idx64");
+  Value *oob = builder_.CreateICmpUGE(idx64, len, "oob");
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock *panicBB = BasicBlock::Create(ctx_, "oob.panic", fn);
+  BasicBlock *okBB = BasicBlock::Create(ctx_, "oob.ok", fn);
+  builder_.CreateCondBr(oob, panicBB, okBB);
+  builder_.SetInsertPoint(panicBB);
+  builder_.CreateCall(module_->getFunction("kal_panic"), {});
+  builder_.CreateUnreachable();
+  builder_.SetInsertPoint(okBB);
+}
+
 Value *CodeGen::genVariable(const VariableExpr *e) {
   if (e->variantTag >= 0) // 引数なし enum バリアント
     return genVariant(e->type, e->variantTag, {});
@@ -431,18 +449,22 @@ Value *CodeGen::genAddr(const Expr *e) {
   case Expr::Kind::Index: {
     auto *ix = static_cast<const IndexExpr *>(e);
     Value *idx = genExpr(ix->index.get());
-    // 境界チェックなし
+    llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
     if (ix->base->type.isSlice()) {
       // スライス {ptr, len}: 先頭ポインタから要素型で GEP {idx}
       Value *s = genExpr(ix->base.get());
       Value *data = builder_.CreateExtractValue(s, {0}, "sliceptr");
+      Value *len = builder_.CreateExtractValue(s, {1}, "slicelen");
+      emitBoundsCheck(idx, ix->index->type, len); // 境界チェック
       llvm::Type *elemTy = toLLVM(ix->base->type.elemType());
       return builder_.CreateGEP(elemTy, data, {idx}, "elemptr");
     }
     // 配列 [N x T]: アドレスから GEP {0, idx}
     Value *base = genAddr(ix->base.get());
+    Value *len = ConstantInt::get(i64, ix->base->type.arrayLen);
+    emitBoundsCheck(idx, ix->index->type, len); // 境界チェック (N は定数)
     llvm::Type *at = toLLVM(ix->base->type);
-    Value *zero = ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0);
+    Value *zero = ConstantInt::get(i64, 0);
     return builder_.CreateGEP(at, base, {zero, idx}, "elemptr");
   }
   default:
@@ -817,6 +839,7 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   ensure("printi", voidTy, {i64});
   ensure("printd", voidTy, {f64});
   ensure("putchard", voidTy, {i64});
+  ensure("kal_panic", voidTy, {}); // 境界違反などで呼ぶ (メッセージ表示して終了)
 
   // (2) 関数本体 (非総称のみ。ジェネリックは呼び出しから単態化される)
   for (auto &f : program.functions)
@@ -935,6 +958,19 @@ void CodeGen::emitRuntimeDefs() {
     Value *c = builder_.CreateTrunc(fn->getArg(0), i32, "c");
     builder_.CreateCall(putcharFn, {c});
     builder_.CreateRetVoid();
+    verifyFunction(*fn);
+  }
+  // kal_panic(): メッセージを表示して exit(1)
+  {
+    llvm::Type *voidTy = llvm::Type::getVoidTy(ctx_);
+    auto exitFn = module_->getOrInsertFunction(
+        "exit", FunctionType::get(voidTy, {i32}, false));
+    Function *fn = body("kal_panic");
+    Value *msg = builder_.CreateGlobalString("panic: index out of bounds\n",
+                                             "panic_msg");
+    builder_.CreateCall(printfFn, {msg});
+    builder_.CreateCall(exitFn, {ConstantInt::get(i32, 1)});
+    builder_.CreateUnreachable();
     verifyFunction(*fn);
   }
 }

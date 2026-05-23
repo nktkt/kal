@@ -1,0 +1,6 @@
+error[E0120]: 数値型が必要です (実際 bool)
+ --> tests/diagnostics/bool_arith.kal:2:1
+  |
+2 | true + 1;
+  | ^^^^
+1 個のエラーで中断しました

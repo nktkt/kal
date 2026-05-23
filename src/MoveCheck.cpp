@@ -69,6 +69,7 @@ void MoveCheck::requireLive(const Expr *e) {
 void MoveCheck::use(const Expr *e) {
   switch (e->kind) {
   case Expr::Kind::Number:
+  case Expr::Kind::BoolLit:
     return;
   case Expr::Kind::Variable: {
     auto *v = static_cast<const VariableExpr *>(e);

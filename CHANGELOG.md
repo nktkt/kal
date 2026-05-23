@@ -5,6 +5,12 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Bounds-checked indexing:** array and slice indexing `a[i]` (read and write)
+  now checks `0 <= i < len` at runtime and aborts with a panic on an
+  out-of-range (or negative) index — memory-safe indexing without GC. (Optimized
+  builds elide checks that are provably in range.)
+- **Bool literals:** `true` and `false`. (So `Result<i64, bool>` and other
+  `bool`-carrying types are now expressible directly.)
 - **Generic functions:** `fn name<T, …>(…) -> …` — monomorphized per call. Type
   arguments are **inferred** from the arguments and the expected type (no
   turbofish). Bodies are type-checked once with the type parameters abstract, so

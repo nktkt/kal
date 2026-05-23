@@ -54,6 +54,8 @@ private:
   llvm::Value *genAddr(const Expr *e);
   // entry ブロックに alloca を作る (mem2reg が昇格できる)
   llvm::AllocaInst *entryAlloca(llvm::Type *ty, const std::string &name);
+  // 添字 idx が [0, len) の範囲外なら kal_panic を呼ぶコードを挿入する。
+  void emitBoundsCheck(llvm::Value *idx, const Type &idxType, llvm::Value *len);
   // enum バリアント構築 (具体化された enum 型 + tag + ペイロード)
   llvm::Value *genVariant(const Type &enumType, int tag,
                           llvm::ArrayRef<llvm::Value *> payload);

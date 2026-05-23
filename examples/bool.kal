@@ -1,0 +1,21 @@
+# 真偽値リテラル true / false。
+
+fn even(n: i64) -> bool = n % 2 == 0;
+fn both(a: bool, b: bool) -> bool = a && b;
+
+printi(if even(4) then 1 else 0);          # => 1
+printi(if true && false then 1 else 0);    # => 0
+printi(if both(true, true) then 1 else 0); # => 1
+
+# bool をエラー型に使える Result<i64, bool> (以前は数値しか書けなかった)。
+fn checked(ok: bool) -> Result<i64, bool> =
+  if ok then Ok(42) else Err(false);
+
+fn val(r: Result<i64, bool>) -> i64 =
+  match r {
+    Ok(v)  => v,
+    Err(_) => -1,
+  };
+
+printi(val(checked(true)));    # => 42
+printi(val(checked(false)));   # => -1
