@@ -700,6 +700,11 @@ Type Sema::checkBinary(BinaryExpr *e, std::optional<Type> expected) {
       lt.isKnown() ? std::optional<Type>(lt) : std::nullopt;
   Type rt = check(e->rhs.get(), rhsHint);
 
+  // 文字列比較: str / String 同士はすべての比較演算子でバイト辞書順比較できる
+  // (str と String の混在も可)。算術 (+ 等) は未対応。
+  if (isCompare && lt.isStringish() && rt.isStringish())
+    return Type::boolean();
+
   // == / != は数値か bool に使える。順序比較・算術は数値のみ。
   if (lt.isKnown()) {
     bool ok = isEq ? (lt.isNumeric() || lt.isBool()) : lt.isNumeric();

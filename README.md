@@ -453,10 +453,22 @@ prints(s);                  # Hello, world
 len(s);                     # => 12
 ```
 
-`push_str` needs a mutable `String`; `str` is read-only (no `s[i] = …`). Equality
-(`==`), `+` concatenation, and `String`→`str` coercion are future work; for now
-pass a `String` where a `str` is expected only to `prints`/`len`/indexing (which
-accept both).
+`push_str` needs a mutable `String`; `str` is read-only (no `s[i] = …`).
+
+Strings compare with `== != < <= > >=` by **byte (lexicographic) order** — `str`
+and `String` mix freely, and both sides are borrowed (a comparison never consumes
+its operands):
+
+```
+"abc" < "abd";              # => true
+"ab"  < "abc";              # => true   (a prefix sorts first)
+let s: String = string("hi");
+s == "hi";                  # => true   (s is still usable afterwards)
+```
+
+`+` concatenation and an implicit `String`→`str` coercion are still future work;
+for now pass a `String` where a `str` is expected only to `prints`/`len`/indexing
+and the comparison operators (which accept both).
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line

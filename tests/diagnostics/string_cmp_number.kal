@@ -1,0 +1,2 @@
+# A string can only be compared with another string, not a number.
+{ printi(if "a" == 5 then 1 else 0); };

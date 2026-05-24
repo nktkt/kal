@@ -765,7 +765,51 @@ Value *CodeGen::genBinary(const BinaryExpr *e) {
   Value *r = genExpr(e->rhs.get());
   if (blockDone())
     return nullptr; // 被演算子が発散
-  const kal::Type &ot = e->lhs->type; // 両辺は同じ型 (Sema 保証)
+  const kal::Type &ot = e->lhs->type; // 算術は両辺同型 (Sema 保証)
+
+  // 文字列比較 (バイト辞書順)。str / String を混在できる。
+  if (ot.isStringish() || e->rhs->type.isStringish()) {
+    llvm::Type *i32 = llvm::Type::getInt32Ty(ctx_);
+    llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+    Value *p1 = builder_.CreateExtractValue(l, {0}, "p1");
+    Value *n1 = builder_.CreateExtractValue(l, {1}, "n1");
+    Value *p2 = builder_.CreateExtractValue(r, {0}, "p2");
+    Value *n2 = builder_.CreateExtractValue(r, {1}, "n2");
+    Value *minlen = builder_.CreateSelect(builder_.CreateICmpULT(n1, n2), n1, n2,
+                                          "minlen");
+    Value *m = builder_.CreateCall(module_->getFunction("memcmp"),
+                                   {p1, p2, minlen}, "memcmp");
+    Constant *zero32 = ConstantInt::get(i32, 0);
+    Constant *m1 = ConstantInt::get(i32, -1, /*signed=*/true);
+    Constant *p1c = ConstantInt::get(i32, 1);
+    // 長さ比較 (バイトが同一の場合のタイブレーク): n1<n2→-1, n1>n2→1, =→0
+    Value *lenCmp = builder_.CreateSelect(
+        builder_.CreateICmpULT(n1, n2), m1,
+        builder_.CreateSelect(builder_.CreateICmpUGT(n1, n2), p1c, zero32),
+        "lenCmp");
+    // cmp = m<0 ? -1 : (m>0 ? 1 : lenCmp)  ∈ {-1,0,1}
+    Value *cmp = builder_.CreateSelect(
+        builder_.CreateICmpSLT(m, zero32), m1,
+        builder_.CreateSelect(builder_.CreateICmpSGT(m, zero32), p1c, lenCmp),
+        "cmp");
+    switch (e->op) {
+    case Tok::EqEq:
+      return builder_.CreateICmpEQ(cmp, zero32, "streq");
+    case Tok::BangEq:
+      return builder_.CreateICmpNE(cmp, zero32, "strne");
+    case Tok::Less:
+      return builder_.CreateICmpSLT(cmp, zero32, "strlt");
+    case Tok::Le:
+      return builder_.CreateICmpSLE(cmp, zero32, "strle");
+    case Tok::Greater:
+      return builder_.CreateICmpSGT(cmp, zero32, "strgt");
+    case Tok::Ge:
+      return builder_.CreateICmpSGE(cmp, zero32, "strge");
+    default:
+      return nullptr;
+    }
+  }
+
   bool isF = ot.isFloat();
   bool sgn = ot.isInt() ? ot.isSigned : true;
 
@@ -1591,6 +1635,8 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
          {PointerType::getUnqual(ctx_), i64}); // Vec の成長
   ensure("kal_prints", voidTy,
          {PointerType::getUnqual(ctx_), i64}); // str の出力
+  ensure("memcmp", llvm::Type::getInt32Ty(ctx_),
+         {PointerType::getUnqual(ctx_), PointerType::getUnqual(ctx_), i64});
 
   // (2) 関数本体 (非総称のみ。ジェネリックは呼び出しから単態化される)
   for (auto &f : program.functions)

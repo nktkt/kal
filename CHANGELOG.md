@@ -5,6 +5,11 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **String comparison:** `str` and `String` now compare with `== != < <= > >=`
+  by byte (lexicographic) order, via libc `memcmp` (equal prefix → shorter sorts
+  first; empty string is smallest). The two types mix freely (`s == "hi"`), both
+  operands are borrowed (a comparison never moves/consumes a `String`), and the
+  result is `bool`. JIT and AOT agree; no leaks.
 - **Owned `String`:** a heap-backed, growable UTF-8 string (`{ptr, len, cap}` ≈
   `Vec<u8>`). `string(s)` copies a `str` onto the heap, `push_str(s, t)` appends
   a `str` (reallocating to `max(cap*2, needed)`), and a `String` owns its buffer

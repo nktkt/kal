@@ -1,0 +1,33 @@
+# 文字列の比較: ==  !=  <  <=  >  >= (バイト辞書順)。
+# str と String のどちらも、また混在しても比較できる (両辺とも借用＝消費しない)。
+# 長さが異なり片方がもう片方の接頭辞なら、短い方が「小さい」。
+
+fn b(x: bool) -> i64 = if x then 1 else 0;
+
+# 等価・非等価
+printi(b("abc" == "abc"));   # => 1
+printi(b("abc" == "abd"));   # => 0
+printi(b("abc" != "xyz"));   # => 1
+
+# 辞書順
+printi(b("abc" < "abd"));    # => 1
+printi(b("ab"  < "abc"));    # => 1   (接頭辞は小さい)
+printi(b("b"   > "abc"));    # => 1   ('b' > 'a')
+printi(b("abc" <= "abc"));   # => 1
+printi(b(""    < "a"));      # => 1   (空文字列は最小)
+
+# str と String の混在 (どちらも借用なので比較後も使える)
+{
+  let s: String = string("hello");
+  printi(b(s == "hello"));   # => 1
+  printi(b(s < "world"));    # => 1   ('h' < 'w')
+  prints(s); prints("\n");   # hello  (比較で消費されていない)
+};
+
+# 動的に作った String 同士
+{
+  let mut a: String = string("foo");
+  push_str(a, "bar");
+  let c: String = string("foobar");
+  printi(b(a == c));         # => 1
+};

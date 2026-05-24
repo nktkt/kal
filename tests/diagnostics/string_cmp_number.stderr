@@ -1,0 +1,6 @@
+error[E0120]: == / != には数値か bool が必要です (実際 str)
+ --> tests/diagnostics/string_cmp_number.kal:2:13
+  |
+2 | { printi(if "a" == 5 then 1 else 0); };
+  |             ^^^
+1 個のエラーで中断しました

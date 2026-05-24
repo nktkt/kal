@@ -88,8 +88,18 @@ void MoveCheck::use(const Expr *e) {
   }
   case Expr::Kind::Binary: {
     auto *b = static_cast<const BinaryExpr *>(e);
-    use(b->lhs.get());
-    use(b->rhs.get());
+    // 比較演算子は被演算子を読むだけ (消費しない)。文字列比較で String を
+    // ムーブしてしまわないよう借用扱いにする (数値・bool は Copy なので影響なし)。
+    bool isCmp = b->op == Tok::EqEq || b->op == Tok::BangEq ||
+                 b->op == Tok::Less || b->op == Tok::Greater ||
+                 b->op == Tok::Le || b->op == Tok::Ge;
+    if (isCmp) {
+      requireLive(b->lhs.get());
+      requireLive(b->rhs.get());
+    } else {
+      use(b->lhs.get());
+      use(b->rhs.get());
+    }
     return;
   }
   case Expr::Kind::MethodCall: {
