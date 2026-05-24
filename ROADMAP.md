@@ -154,9 +154,12 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   ✅ String comparison (`== != < <= > >=`, lexicographic via `memcmp`) landed.
   ✅ `Vec` `pop` (→ `Option<T>`) and `clear` landed.
   ✅ Discarded owned temporaries at statement position are now dropped (no leak).
-  Next: `+` concatenation / `String`→`str` coercion, then `HashMap`.
+  ✅ String concatenation `+` (str/String → owned String) landed, leak-free for
+  chains and reassignment.
+  Next: `String`→`str` coercion, then `HashMap`.
   (Remaining: iteration; dropping owned temporaries only *borrowed* inside a
-  larger expression — needs per-temporary tracking, naturally part of the MIR.)
+  larger call argument, e.g. `prints(a + b)` — needs per-temporary tracking,
+  naturally part of the MIR.)
 - `Option<T>` / `Result<T,E>` and the `?` operator — ✅ done (prelude types +
   early `return` and `?`). (Heap-backed collections still pending.)
 - Iterators and closures.

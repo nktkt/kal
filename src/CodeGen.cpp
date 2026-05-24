@@ -798,47 +798,67 @@ Value *CodeGen::genBinary(const BinaryExpr *e) {
     return nullptr; // 被演算子が発散
   const kal::Type &ot = e->lhs->type; // 算術は両辺同型 (Sema 保証)
 
-  // 文字列比較 (バイト辞書順)。str / String を混在できる。
-  if (ot.isStringish() || e->rhs->type.isStringish()) {
+  // 文字列演算 (比較・連結)。str / String を混在できる。両辺は借用なので、
+  // 被演算子が所有ヒープの一時値なら使用後に drop する (チェーン a+b+c の中間や
+  // string("a")==string("b") の一時値がリークしないように)。
+  bool strBin =
+      (ot.isStringish() || e->rhs->type.isStringish()) &&
+      (e->op == Tok::Plus || e->op == Tok::EqEq || e->op == Tok::BangEq ||
+       e->op == Tok::Less || e->op == Tok::Greater || e->op == Tok::Le ||
+       e->op == Tok::Ge);
+  if (strBin) {
     llvm::Type *i32 = llvm::Type::getInt32Ty(ctx_);
     llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+    llvm::Type *i8 = llvm::Type::getInt8Ty(ctx_);
     Value *p1 = builder_.CreateExtractValue(l, {0}, "p1");
     Value *n1 = builder_.CreateExtractValue(l, {1}, "n1");
     Value *p2 = builder_.CreateExtractValue(r, {0}, "p2");
     Value *n2 = builder_.CreateExtractValue(r, {1}, "n2");
-    Value *minlen = builder_.CreateSelect(builder_.CreateICmpULT(n1, n2), n1, n2,
-                                          "minlen");
-    Value *m = builder_.CreateCall(module_->getFunction("memcmp"),
-                                   {p1, p2, minlen}, "memcmp");
-    Constant *zero32 = ConstantInt::get(i32, 0);
-    Constant *m1 = ConstantInt::get(i32, -1, /*signed=*/true);
-    Constant *p1c = ConstantInt::get(i32, 1);
-    // 長さ比較 (バイトが同一の場合のタイブレーク): n1<n2→-1, n1>n2→1, =→0
-    Value *lenCmp = builder_.CreateSelect(
-        builder_.CreateICmpULT(n1, n2), m1,
-        builder_.CreateSelect(builder_.CreateICmpUGT(n1, n2), p1c, zero32),
-        "lenCmp");
-    // cmp = m<0 ? -1 : (m>0 ? 1 : lenCmp)  ∈ {-1,0,1}
-    Value *cmp = builder_.CreateSelect(
-        builder_.CreateICmpSLT(m, zero32), m1,
-        builder_.CreateSelect(builder_.CreateICmpSGT(m, zero32), p1c, lenCmp),
-        "cmp");
-    switch (e->op) {
-    case Tok::EqEq:
-      return builder_.CreateICmpEQ(cmp, zero32, "streq");
-    case Tok::BangEq:
-      return builder_.CreateICmpNE(cmp, zero32, "strne");
-    case Tok::Less:
-      return builder_.CreateICmpSLT(cmp, zero32, "strlt");
-    case Tok::Le:
-      return builder_.CreateICmpSLE(cmp, zero32, "strle");
-    case Tok::Greater:
-      return builder_.CreateICmpSGT(cmp, zero32, "strgt");
-    case Tok::Ge:
-      return builder_.CreateICmpSGE(cmp, zero32, "strge");
-    default:
-      return nullptr;
+    Value *res;
+    if (e->op == Tok::Plus) {
+      // 連結: malloc(n1+n2) に両辺をコピーして所有 String {buf, total, total} に
+      Value *total = builder_.CreateAdd(n1, n2, "total");
+      Value *buf =
+          builder_.CreateCall(module_->getFunction("malloc"), {total}, "catbuf");
+      builder_.CreateMemCpy(buf, MaybeAlign(1), p1, MaybeAlign(1), n1);
+      Value *tail = builder_.CreateGEP(i8, buf, {n1}, "tail");
+      builder_.CreateMemCpy(tail, MaybeAlign(1), p2, MaybeAlign(1), n2);
+      StructType *vt = vecLLVMTy();
+      Value *agg = UndefValue::get(vt);
+      agg = builder_.CreateInsertValue(agg, buf, {0});
+      agg = builder_.CreateInsertValue(agg, total, {1});
+      agg = builder_.CreateInsertValue(agg, total, {2}); // cap = len
+      res = agg;
+    } else {
+      // 比較 (バイト辞書順)
+      Value *minlen = builder_.CreateSelect(builder_.CreateICmpULT(n1, n2), n1,
+                                            n2, "minlen");
+      Value *m = builder_.CreateCall(module_->getFunction("memcmp"),
+                                     {p1, p2, minlen}, "memcmp");
+      Constant *zero32 = ConstantInt::get(i32, 0);
+      Constant *m1 = ConstantInt::get(i32, -1, /*signed=*/true);
+      Constant *p1c = ConstantInt::get(i32, 1);
+      Value *lenCmp = builder_.CreateSelect(
+          builder_.CreateICmpULT(n1, n2), m1,
+          builder_.CreateSelect(builder_.CreateICmpUGT(n1, n2), p1c, zero32),
+          "lenCmp");
+      Value *cmp = builder_.CreateSelect(
+          builder_.CreateICmpSLT(m, zero32), m1,
+          builder_.CreateSelect(builder_.CreateICmpSGT(m, zero32), p1c, lenCmp),
+          "cmp");
+      switch (e->op) {
+      case Tok::EqEq: res = builder_.CreateICmpEQ(cmp, zero32, "streq"); break;
+      case Tok::BangEq: res = builder_.CreateICmpNE(cmp, zero32, "strne"); break;
+      case Tok::Less: res = builder_.CreateICmpSLT(cmp, zero32, "strlt"); break;
+      case Tok::Le: res = builder_.CreateICmpSLE(cmp, zero32, "strle"); break;
+      case Tok::Greater: res = builder_.CreateICmpSGT(cmp, zero32, "strgt"); break;
+      default: res = builder_.CreateICmpSGE(cmp, zero32, "strge"); break;
+      }
     }
+    // 被演算子が所有 String の一時値 (場所式でない) なら解放する。
+    dropDiscardedValue(e->lhs.get(), l);
+    dropDiscardedValue(e->rhs.get(), r);
+    return res;
   }
 
   bool isF = ot.isFloat();

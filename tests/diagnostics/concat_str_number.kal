@@ -1,0 +1,2 @@
+# `+` mixing a string with a number is a type error.
+{ let s: String = "n=" + 5; prints(s); };

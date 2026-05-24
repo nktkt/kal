@@ -1,0 +1,6 @@
+error[E0120]: 数値型が必要です (実際 str)
+ --> tests/diagnostics/concat_str_number.kal:2:19
+  |
+2 | { let s: String = "n=" + 5; prints(s); };
+  |                   ^^^^
+1 個のエラーで中断しました

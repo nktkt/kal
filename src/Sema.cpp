@@ -701,9 +701,13 @@ Type Sema::checkBinary(BinaryExpr *e, std::optional<Type> expected) {
   Type rt = check(e->rhs.get(), rhsHint);
 
   // 文字列比較: str / String 同士はすべての比較演算子でバイト辞書順比較できる
-  // (str と String の混在も可)。算術 (+ 等) は未対応。
+  // (str と String の混在も可)。
   if (isCompare && lt.isStringish() && rt.isStringish())
     return Type::boolean();
+
+  // 文字列連結: str / String + str / String → 新しい所有 String を確保して返す。
+  if (op == Tok::Plus && lt.isStringish() && rt.isStringish())
+    return Type::stringTy();
 
   // == / != は数値か bool に使える。順序比較・算術は数値のみ。
   if (lt.isKnown()) {

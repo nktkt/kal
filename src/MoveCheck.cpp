@@ -88,12 +88,14 @@ void MoveCheck::use(const Expr *e) {
   }
   case Expr::Kind::Binary: {
     auto *b = static_cast<const BinaryExpr *>(e);
-    // 比較演算子は被演算子を読むだけ (消費しない)。文字列比較で String を
-    // ムーブしてしまわないよう借用扱いにする (数値・bool は Copy なので影響なし)。
+    // 比較演算子は被演算子を読むだけ (消費しない)。また文字列演算 (比較・連結)
+    // も両辺を借用する (String をムーブしない)。数値・bool は Copy なので
+    // use/requireLive の差は出ない。
     bool isCmp = b->op == Tok::EqEq || b->op == Tok::BangEq ||
                  b->op == Tok::Less || b->op == Tok::Greater ||
                  b->op == Tok::Le || b->op == Tok::Ge;
-    if (isCmp) {
+    bool strOp = b->lhs->type.isStringish() || b->rhs->type.isStringish();
+    if (isCmp || strOp) {
       requireLive(b->lhs.get());
       requireLive(b->rhs.get());
     } else {

@@ -1,0 +1,37 @@
+# 文字列連結 `+`。str / String を自由に混ぜて連結でき、結果は新しい所有 String。
+#   "a" + "b"        str + str → String
+#   s + t            String + String / str との混在も可
+# 両辺は借用なので連結後も元の文字列は使える。連結のチェーン a + b + c の
+# 中間 String も、再代入 s = s + x の旧バッファも、自動で解放される (リークなし)。
+
+# 基本: str どうしを連結。
+{
+  let s: String = "Hello" + ", " + "world";
+  prints(s); prints("\n");        # => Hello, world
+  printi(len(s));                 # => 12
+};
+
+# str と String の混在 (元の String は借用なので連結後も使える)。
+{
+  let name: String = string("Ada");
+  let greeting: String = "Hi, " + name + "!";
+  prints(greeting); prints("\n"); # => Hi, Ada!
+  prints(name); prints("\n");     # => Ada   (name はまだ生きている)
+};
+
+# 再代入で少しずつ組み立てる (旧バッファは毎回解放される)。
+{
+  let mut acc: String = string("");
+  acc = acc + "one ";
+  acc = acc + "two ";
+  acc = acc + "three";
+  prints(acc); prints("\n");      # => one two three
+};
+
+# ループで組み立てる。
+{
+  let mut line: String = string("");
+  for i = 0, i < 5, 1 in line = line + "*";
+  prints(line); prints("\n");     # => *****
+  printi(len(line));              # => 5
+};

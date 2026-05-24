@@ -5,6 +5,14 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **String concatenation `+`.** `str`/`String` concatenate with `+` (mixing
+  allowed) into a fresh owned `String` (`malloc` + two `memcpy`). Operands are
+  borrowed, so variables stay usable; an owned-temporary operand is freed right
+  after, so chains (`a + b + c`) and reassignment (`s = s + x`, including in a
+  loop) don't leak intermediates. The same temporary-operand cleanup now also
+  applies to string comparison, so `string("a") == string("b")` no longer leaks.
+  Verified leak-free and double-free free (incl. `s = s + x` evaluation order),
+  JIT and AOT agree.
 - **Discarded temporaries are dropped.** An owned-heap value produced at statement
   position and thrown away — `box(x);`, `string(x);`, `pop(v);`, or a call whose
   owned result is ignored — is now freed at the end of that statement instead of

@@ -475,9 +475,19 @@ let s: String = string("hi");
 s == "hi";                  # => true   (s is still usable afterwards)
 ```
 
-`+` concatenation and an implicit `String`→`str` coercion are still future work;
-for now pass a `String` where a `str` is expected only to `prints`/`len`/indexing
-and the comparison operators (which accept both).
+`+` concatenates strings — `str`/`String` mix freely and the result is a fresh
+owned `String`. Operands are borrowed (so variables stay usable), and an owned
+temporary operand is freed automatically, so chains and reassignment don't leak:
+
+```
+let s: String = "Hello" + ", " + "world";   # chained; intermediates freed
+let mut acc: String = string("");
+acc = acc + "x";                              # old buffer freed, then reassigned
+```
+
+An implicit `String`→`str` coercion is still future work; for now pass a `String`
+where a `str` is expected only to `prints`/`len`/indexing, comparison, and `+`
+(which accept both).
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
