@@ -214,6 +214,10 @@ Token Lexer::next() {
     }
     return make(Tok::Bang);
   case ':':
+    if (pos_ < buf_.size() && buf_[pos_] == ':') {
+      ++pos_;
+      return make(Tok::ColonColon); // ::
+    }
     return make(Tok::Colon);
   case '.':
     return make(Tok::Dot);

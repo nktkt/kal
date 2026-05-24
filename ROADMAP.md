@@ -160,6 +160,8 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   ✅ Owned temporaries passed to borrowing operations (`prints`/`len`/`push_str`,
   string operators, `str` params) are now dropped — `prints(a + b)` no longer
   leaks.
+  ✅ Associated functions + `::` (`Type::new(...)`) landed — constructors/factories
+  on user types, generic-type args inferred from the call.
   Next: `HashMap`; broaden coercion to methods/generics/returns (with the borrow
   checker).
   (Remaining leaks, both memory-safe: an indexed/method-receiver owned temporary,

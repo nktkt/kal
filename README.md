@@ -318,6 +318,21 @@ Point { x: 3, y: 4 }.norm2();        # => 25
 impl Pair<A, B> { fn fst(&self) -> A = self.first; }   # methods on a generic type
 ```
 
+A function in an `impl` block that **doesn't take `self`** is an *associated
+function* (a constructor or factory), called with `Type::name(args)`:
+
+```
+impl Point {
+  fn new(x: i64, y: i64) -> Point = Point { x: x, y: y };
+  fn origin() -> Point = Point { x: 0, y: 0 };
+}
+Point::new(3, 4).norm2();            # => 25
+```
+
+Associated functions and methods coexist in one `impl`. On a generic type the
+type arguments are inferred from the call (`Pair::make(7, true)` → `Pair<i64,
+bool>`). Arguments are passed by value (moved) — there is no receiver.
+
 ### Traits
 
 A `trait` declares an interface (method signatures); `impl Trait for Type`

@@ -220,6 +220,49 @@ ExprPtr Parser::parseIdentifierExpr() {
   std::string name = cur_.text;
   advance();
 
+  // 関連関数呼び出し:  Type::name(args)
+  if (cur_.kind == Tok::ColonColon) {
+    advance(); // '::'
+    if (cur_.kind != Tok::Identifier) {
+      diag_.error(cur_.span, "E0270", "'::' の後には関連関数名が必要です");
+      return nullptr;
+    }
+    Span fnSpan = cur_.span;
+    std::string fnName = cur_.text;
+    advance();
+    if (cur_.kind != Tok::LParen) {
+      diag_.error(cur_.span, "E0271", "関連関数呼び出しには '(' が必要です");
+      return nullptr;
+    }
+    advance(); // '('
+    bool savedNSL = noStructLit_;
+    noStructLit_ = false;
+    std::vector<ExprPtr> args;
+    if (cur_.kind != Tok::RParen) {
+      for (;;) {
+        auto a = parseExpression();
+        if (!a)
+          return nullptr;
+        args.push_back(std::move(a));
+        if (cur_.kind == Tok::RParen)
+          break;
+        if (cur_.kind != Tok::Comma) {
+          diag_.error(cur_.span, "E0011", "引数リストには ',' か ')' が必要です");
+          return nullptr;
+        }
+        advance();
+      }
+    }
+    Span end = cur_.span;
+    advance(); // ')'
+    noStructLit_ = savedNSL;
+    Span full{idSpan.fileId, idSpan.start, end.end};
+    auto call = std::make_unique<CallExpr>(full, std::move(fnName), fnSpan,
+                                           std::move(args));
+    call->ownerType = std::move(name); // Type:: の Type
+    return call;
+  }
+
   // 構造体リテラル:  Name { f: e, ... }
   // (noStructLit_ 中 = match の対象式などでは '{' を奪わない)
   if (cur_.kind == Tok::LBrace && !noStructLit_) {
@@ -1289,59 +1332,73 @@ std::unique_ptr<ImplBlock> Parser::parseImplBlock() {
     }
     advance();
 
-    // レシーバ: self / &self / &mut self
-    int selfKind = 0;
-    if (cur_.kind == Tok::SelfKw) {
+    // レシーバ: self / &self / &mut self。いずれも無ければ関連関数 (self なし)。
+    std::vector<std::string> args;
+    std::vector<Type> paramTypes;
+    bool hasSelf = cur_.kind == Tok::SelfKw || cur_.kind == Tok::Amp;
+    // 1 引数 (name: type) を読んで args/paramTypes に積むヘルパ。
+    auto parseParam = [&]() -> bool {
+      if (cur_.kind != Tok::Identifier) {
+        diag_.error(cur_.span, "E0023", "引数名が必要です");
+        return false;
+      }
+      std::string pn = cur_.text;
       advance();
-    } else if (cur_.kind == Tok::Amp) {
+      if (cur_.kind != Tok::Colon) {
+        diag_.error(cur_.span, "E0024", "引数には ': 型' の注釈が必要です");
+        return false;
+      }
       advance();
-      if (cur_.kind == Tok::Mut) {
-        selfKind = 2;
+      Type pt;
+      if (!parseType(pt))
+        return false;
+      args.push_back(std::move(pn));
+      paramTypes.push_back(std::move(pt));
+      return true;
+    };
+    if (hasSelf) {
+      int selfKind = 0;
+      if (cur_.kind == Tok::SelfKw) {
         advance();
-      } else {
-        selfKind = 1;
+      } else { // '&'
+        advance();
+        if (cur_.kind == Tok::Mut) {
+          selfKind = 2;
+          advance();
+        } else {
+          selfKind = 1;
+        }
+        if (cur_.kind != Tok::SelfKw) {
+          diag_.error(cur_.span, "E0203", "メソッドの第一引数は self が必要です");
+          return nullptr;
+        }
+        advance();
       }
-      if (cur_.kind != Tok::SelfKw) {
-        diag_.error(cur_.span, "E0203", "メソッドの第一引数は self が必要です");
-        return nullptr;
+      args.push_back("self");
+      paramTypes.push_back(selfKind == 0   ? selfBase
+                           : selfKind == 1 ? Type::refTy(selfBase, false)
+                                           : Type::refTy(selfBase, true));
+      // 追加引数は各々カンマで区切られる
+      while (cur_.kind == Tok::Comma) {
+        advance();
+        if (!parseParam())
+          return nullptr;
       }
-      advance();
     } else {
-      diag_.error(cur_.span, "E0203", "メソッドの第一引数は self が必要です");
-      return nullptr;
-    }
-    Type selfType = selfKind == 0   ? selfBase
-                    : selfKind == 1 ? Type::refTy(selfBase, false)
-                                    : Type::refTy(selfBase, true);
-
-    std::vector<std::string> args = {"self"};
-    std::vector<Type> paramTypes = {selfType};
-    if (cur_.kind == Tok::Comma) {
-      advance();
-      for (;;) {
-        if (cur_.kind != Tok::Identifier) {
-          diag_.error(cur_.span, "E0023", "引数名が必要です");
-          return nullptr;
+      // 関連関数: self なし。カンマ区切りの引数列を読む。
+      if (cur_.kind != Tok::RParen) {
+        for (;;) {
+          if (!parseParam())
+            return nullptr;
+          if (cur_.kind == Tok::RParen)
+            break;
+          if (cur_.kind != Tok::Comma) {
+            diag_.error(cur_.span, "E0025",
+                        "引数リストには ',' か ')' が必要です");
+            return nullptr;
+          }
+          advance();
         }
-        std::string pn = cur_.text;
-        advance();
-        if (cur_.kind != Tok::Colon) {
-          diag_.error(cur_.span, "E0024", "引数には ': 型' の注釈が必要です");
-          return nullptr;
-        }
-        advance();
-        Type pt;
-        if (!parseType(pt))
-          return nullptr;
-        args.push_back(std::move(pn));
-        paramTypes.push_back(pt);
-        if (cur_.kind == Tok::RParen)
-          break;
-        if (cur_.kind != Tok::Comma) {
-          diag_.error(cur_.span, "E0025", "引数リストには ',' か ')' が必要です");
-          return nullptr;
-        }
-        advance();
       }
     }
     if (cur_.kind != Tok::RParen) {

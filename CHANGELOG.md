@@ -5,6 +5,13 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Associated functions and `::`.** A function in an `impl` block that takes no
+  `self` is an associated function (constructor/factory), called as
+  `Type::name(args)` (new `::` token). Methods and associated functions coexist in
+  one `impl`; on a generic type the type arguments are inferred from the call
+  (`Pair::make(7, true)` → `Pair<i64, bool>`). Arguments are by value (moved);
+  monomorphized like methods. Diagnostics `E0270`/`E0271` (parse), `E0272`
+  (unknown associated function), `E0206` (name clash with a method).
 - **Borrowed temporaries are dropped.** An owned-heap temporary passed to a
   borrowing operation is now freed after that operation, closing the most common
   remaining leaks: `prints(a + b)`, `len(make_vec())`, `push_str(s, a + b)`, and a

@@ -301,6 +301,21 @@ Point { x: 3, y: 4 }.norm2();        # => 25
 impl Pair<A, B> { fn fst(&self) -> A = self.first; }   # ジェネリック型のメソッド
 ```
 
+impl ブロック内で **`self` を取らない**関数は*関連関数*（コンストラクタや
+ファクトリ）で、`Type::name(args)` で呼びます:
+
+```
+impl Point {
+  fn new(x: i64, y: i64) -> Point = Point { x: x, y: y };
+  fn origin() -> Point = Point { x: 0, y: 0 };
+}
+Point::new(3, 4).norm2();            # => 25
+```
+
+関連関数とメソッドは 1 つの impl に同居できます。ジェネリック型では型引数が
+呼び出しから推論されます（`Pair::make(7, true)` → `Pair<i64, bool>`）。引数は
+値渡し（ムーブ）で、レシーバはありません。
+
 ### トレイト
 
 `trait` はインターフェース（メソッドのシグネチャ）を宣言し、`impl Trait for Type`

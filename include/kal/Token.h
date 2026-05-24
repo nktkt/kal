@@ -50,8 +50,9 @@ enum class Tok {
   Equal,
   Arrow,    // ->
   FatArrow, // =>
-  Colon,    // :
-  Dot,      // .
+  Colon,      // :
+  ColonColon, // ::
+  Dot,        // .
   Amp,      // &
   LParen,
   RParen,

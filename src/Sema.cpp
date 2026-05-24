@@ -492,14 +492,21 @@ bool Sema::run(Program &program) {
       genericFuncs_[f->proto->name] = f->proto.get(); // ジェネリックは別管理
   }
 
-  // メソッドを (型名, メソッド名) で登録
+  // メソッド / 関連関数を (型名, 名前) で登録。self の有無で振り分ける。
   for (auto &ib : program.impls)
     for (auto &m : ib->methods) {
       std::string bare = m->proto->name.substr(ib->typeName.size() + 1);
-      if (methods_[ib->typeName].count(bare))
+      bool isAssoc =
+          m->proto->args.empty() || m->proto->args[0] != "self"; // self なし
+      if (methods_[ib->typeName].count(bare) ||
+          assocFns_[ib->typeName].count(bare))
         diag_.error(m->proto->nameSpan, "E0206",
-                    "メソッドが重複しています: " + ib->typeName + "." + bare);
-      methods_[ib->typeName][bare] = m.get();
+                    "メソッド/関連関数が重複しています: " + ib->typeName + "." +
+                        bare);
+      if (isAssoc)
+        assocFns_[ib->typeName][bare] = m.get();
+      else
+        methods_[ib->typeName][bare] = m.get();
     }
 
   // 各関数本体を検査
@@ -748,6 +755,64 @@ Type Sema::checkUnary(UnaryExpr *e, std::optional<Type> expected) {
 }
 
 Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
+  // 関連関数呼び出し: Type::name(args)。impl の型引数 (ジェネリック impl) は
+  // 期待型と引数から推論する (ジェネリック関数と同じ仕組み)。
+  if (!e->ownerType.empty()) {
+    const FunctionDef *def = nullptr;
+    auto tit = assocFns_.find(e->ownerType);
+    if (tit != assocFns_.end()) {
+      auto fit = tit->second.find(e->callee);
+      if (fit != tit->second.end())
+        def = fit->second;
+    }
+    if (!def) {
+      diag_.error(e->calleeSpan, "E0272",
+                  "型 " + e->ownerType + " に関連関数 '" + e->callee +
+                      "' はありません");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unknown();
+    }
+    const Prototype *proto = def->proto.get();
+    if (proto->paramTypes.size() != e->args.size()) {
+      diag_.error(e->span, "E0103",
+                  "引数の数が一致しません (期待 " +
+                      std::to_string(proto->paramTypes.size()) + ", 実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unknown();
+    }
+    std::map<std::string, Type> subst;
+    if (expected)
+      unifyParam(proto->retType, *expected, subst); // 期待型から推論
+    for (size_t i = 0; i < e->args.size(); ++i) {
+      Type at = check(e->args[i].get(),
+                      std::optional<Type>(substType(proto->paramTypes[i], subst)));
+      unifyParam(proto->paramTypes[i], at, subst);
+    }
+    std::vector<Type> targs;
+    for (auto &p : proto->typeParams) {
+      auto sit = subst.find(p);
+      if (sit == subst.end()) {
+        diag_.error(e->span, "E0097",
+                    "型引数を推論できません: " + e->ownerType + "::" +
+                        e->callee + " の " + p + " (型注釈が必要です)");
+        return Type::unknown();
+      }
+      targs.push_back(sit->second);
+    }
+    for (size_t i = 0; i < e->args.size(); ++i) {
+      Type want = substType(proto->paramTypes[i], subst);
+      if (e->args[i]->type.isKnown() && e->args[i]->type != want)
+        diag_.error(e->args[i]->span, "E0104",
+                    "引数の型が一致しません (期待 " + want.str() + ", 実際 " +
+                        e->args[i]->type.str() + ")");
+    }
+    e->typeArgs = std::move(targs);
+    return substType(proto->retType, subst);
+  }
+
   // 組み込み len(s: &[T]) -> i64 (ユーザーが len を定義していなければ)
   if (e->callee == "len" && !funcs_.count("len")) {
     e->isLenBuiltin = true;

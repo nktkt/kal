@@ -1,0 +1,6 @@
+error[E0104]: 引数の型が一致しません (期待 i64, 実際 bool)
+ --> tests/diagnostics/assoc_arg_mismatch.kal:4:20
+  |
+4 | { let q: P = P::mk(true); printi(q.x); };
+  |                    ^^^^
+1 個のエラーで中断しました

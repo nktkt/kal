@@ -90,6 +90,8 @@ private:
   std::map<std::string, VariantInfo> variants_;
   // 型名 → メソッド名 → メソッド定義 (proto.args[0]="self")
   std::map<std::string, std::map<std::string, const FunctionDef *>> methods_;
+  // 型名 → 関連関数名 → 定義 (self なし。Type::name() で呼ぶ)
+  std::map<std::string, std::map<std::string, const FunctionDef *>> assocFns_;
   std::map<std::string, const TraitDef *> traits_; // トレイト名 → 定義
   std::set<std::pair<std::string, std::string>> traitImpls_; // (トレイト, 型)
   std::set<std::string> activeTypeParams_; // 検査中の関数の型引数 (resolve 用)

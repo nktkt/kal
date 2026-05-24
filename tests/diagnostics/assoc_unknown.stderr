@@ -1,0 +1,6 @@
+error[E0272]: 型 P に関連関数 'nope' はありません
+ --> tests/diagnostics/assoc_unknown.kal:4:17
+  |
+4 | { let q: P = P::nope(); printi(q.x); };
+  |                 ^^^^
+1 個のエラーで中断しました

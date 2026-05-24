@@ -1,0 +1,41 @@
+# 関連関数 (associated functions): self を取らない impl 内の関数。
+#   impl Type { fn name(params) -> ret = ... }   # self なし = 関連関数
+#   Type::name(args)                              # :: で呼ぶ
+# コンストラクタ・ファクトリ関数に使う。メソッド (self あり) と同居できる。
+
+struct Point { x: i64, y: i64 }
+impl Point {
+  fn new(x: i64, y: i64) -> Point = Point { x: x, y: y };  # コンストラクタ
+  fn origin() -> Point = Point { x: 0, y: 0 };             # 引数なしの関連関数
+  fn norm2(&self) -> i64 = self.x * self.x + self.y * self.y; # メソッド (self あり)
+}
+
+{
+  let p: Point = Point::new(3, 4);
+  printi(p.norm2());        # => 25
+  let o: Point = Point::origin();
+  printi(o.x + o.y);        # => 0
+};
+
+# ジェネリックな型の関連関数は、型引数を引数から推論する。
+struct Pair<A, B> { first: A, second: B }
+impl Pair<A, B> {
+  fn make(a: A, b: B) -> Pair<A, B> = Pair { first: a, second: b };
+  fn fst(&self) -> A = self.first;
+}
+{
+  let q: Pair<i64, bool> = Pair::make(7, true);
+  printi(q.fst());          # => 7
+};
+
+# 所有ヒープ (Vec/String 等) を返すコンストラクタも書ける。
+struct Buf { data: Vec<i64> }
+impl Buf {
+  fn empty() -> Buf = Buf { data: vec() };
+}
+{
+  let mut b: Buf = Buf::empty();
+  push(b.data, 10);
+  push(b.data, 20);
+  printi(len(b.data));      # => 2
+};

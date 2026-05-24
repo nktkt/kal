@@ -965,6 +965,21 @@ Value *CodeGen::genCall(const CallExpr *e) {
     for (auto &ct : coercedTemps)
       dropDiscardedValue(ct.first, ct.second);
   };
+  // 関連関数呼び出し Type::name(args): メソッドと同じく単態化して直接呼ぶ
+  // (self なし)。型引数は Sema が推論した e->typeArgs を使う。
+  if (!e->ownerType.empty()) {
+    const FunctionDef *def = methodDefs_[e->ownerType].at(e->callee);
+    std::vector<kal::Type> targs;
+    for (auto &ta : e->typeArgs)
+      targs.push_back(typeSubst_.empty() ? ta : substType(ta, typeSubst_));
+    Function *callee = ensureInstance(def, targs);
+    CallInst *call = builder_.CreateCall(callee, args);
+    kal::Type rt = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
+    if (rt.isUnit())
+      return nullptr;
+    call->setName("assoctmp");
+    return call;
+  }
   if (e->variantTag >= 0) // enum バリアント構築
     return genVariant(e->type, e->variantTag, args);
   // 組み込み len(s): fat pointer {ptr, len} の len フィールドを取り出す

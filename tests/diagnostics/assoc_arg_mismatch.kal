@@ -1,0 +1,4 @@
+# Associated-function arguments are type-checked.
+struct P { x: i64 }
+impl P { fn mk(a: i64) -> P = P { x: a }; }
+{ let q: P = P::mk(true); printi(q.x); };

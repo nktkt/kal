@@ -267,6 +267,8 @@ struct BinaryExpr : Expr {
 struct CallExpr : Expr {
   std::string callee;
   Span calleeSpan;
+  // 関連関数呼び出し `Type::callee(args)` のときの型名 (空なら通常呼び出し)。
+  std::string ownerType;
   std::vector<ExprPtr> args;
   // Sema が、これが enum バリアント構築なら設定する
   int variantTag = -1;
