@@ -500,6 +500,12 @@ bool Sema::run(Program &program) {
     if (ex->typeParams.empty())
       funcs_[ex->name] = {ex->paramTypes, ex->retType};
   for (auto &f : program.functions) {
+    // `main` は AOT の C エントリポイント名と衝突する (黙ってリンクが壊れ、
+    // トップレベルから呼んでも実行されない) ため予約する。
+    if (f->proto->name == "main")
+      diag_.error(f->proto->nameSpan, "E0291",
+                  "main は予約語です (プログラムのエントリポイントは"
+                  "トップレベルの式です)");
     if (f->proto->typeParams.empty())
       funcs_[f->proto->name] = {f->proto->paramTypes, f->proto->retType};
     else

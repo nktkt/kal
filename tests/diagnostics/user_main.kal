@@ -1,0 +1,3 @@
+# `main` is reserved (it collides with the AOT C entry point).
+fn main() -> i64 = 0;
+printi(main());
