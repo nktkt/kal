@@ -1,0 +1,6 @@
+error[E0104]: 引数の型が一致しません (期待 String, 実際 str)
+ --> tests/diagnostics/str_to_string_arg.kal:3:21
+  |
+3 | { printi(need_owned("literal")); };
+  |                     ^^^^^^^^^
+1 個のエラーで中断しました

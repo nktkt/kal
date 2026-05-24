@@ -462,8 +462,20 @@ let mut acc: String = string("");
 acc = acc + "x";                              # 旧バッファを解放してから再代入
 ```
 
-`String`→`str` の暗黙変換は今後の課題で、当面 `String` を `str` の位置に渡せるのは
-`prints`/`len`/添字・比較・`+`（いずれも両対応）だけです。
+`str` を受け取る関数の仮引数に `String` を渡すと、**自動で `str` として借用**されます
+（呼び出し側は `String` を保持し続ける＝ムーブされない）。これで読み取り専用の補助
+関数を `str` で書き、リテラルでも `String` でも呼べます:
+
+```
+fn shout(s: str) = { prints(s); prints("!\n"); };
+shout("literal");
+let g: String = string("hi");
+shout(g);                   # g は str として借用される。呼び出し後も使える
+```
+
+この変換は通常の関数呼び出しの引数で働きます（メソッド・ジェネリック呼び出し・
+return・フィールドはまだ）。逆向き（`str` → `String`）は暗黙には変換しません
+（`string(s)` を使う）。`prints`/`len`/添字・比較・`+` は元から `str`/`String` 両対応です。
 
 ### 組み込み関数
 - `printi(x: i64)` … 整数を 1 行で表示

@@ -5,6 +5,14 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **`String` → `str` coercion (argument position).** Passing a `String` to a
+  function parameter of type `str` now borrows it as a `str` view automatically
+  (`{ptr,len,cap}` → `{ptr,len}`); the caller keeps the `String` (no move, no
+  double-free), so read-only helpers written over `str` accept both `str` literals
+  and `String`s. Applies at plain function-call arguments (not yet methods,
+  generic calls, returns, or fields); the reverse isn't implicit (use `string`).
+  No leak for `String` variables; a discarded temporary `String` argument leaks as
+  before (memory-safe). JIT and AOT agree.
 - **String concatenation `+`.** `str`/`String` concatenate with `+` (mixing
   allowed) into a fresh owned `String` (`malloc` + two `memcpy`). Operands are
   borrowed, so variables stay usable; an owned-temporary operand is freed right

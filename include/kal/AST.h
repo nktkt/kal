@@ -291,6 +291,9 @@ struct CallExpr : Expr {
   bool isClearBuiltin = false;
   // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
   std::vector<Type> typeArgs;
+  // Sema が、各引数を String→str に強制変換 (借用) するかを設定する。
+  // (str を期待する仮引数に String を渡したとき。空なら全て false)
+  std::vector<bool> argCoercedToStr;
   CallExpr(Span s, std::string callee, Span calleeSpan,
            std::vector<ExprPtr> args)
       : Expr(Kind::Call, s), callee(std::move(callee)), calleeSpan(calleeSpan),

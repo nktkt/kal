@@ -144,8 +144,13 @@ void MoveCheck::use(const Expr *e) {
       requireLive(c->args[0].get()); // pop/clear(v): v は可変借用 (ムーブしない)
       return;
     }
-    for (auto &a : c->args)
-      use(a.get());
+    for (size_t i = 0; i < c->args.size(); ++i) {
+      // String→str に強制変換される引数は借用 (ムーブしない)。それ以外は消費。
+      if (i < c->argCoercedToStr.size() && c->argCoercedToStr[i])
+        requireLive(c->args[i].get());
+      else
+        use(c->args[i].get());
+    }
     return;
   }
   case Expr::Kind::Cast:

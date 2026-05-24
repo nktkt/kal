@@ -1,0 +1,3 @@
+# A str is not auto-converted to String (only String -> str is). Use string(s).
+fn need_owned(s: String) -> i64 = len(s);
+{ printi(need_owned("literal")); };

@@ -943,6 +943,19 @@ Value *CodeGen::genCall(const CallExpr *e) {
     args.push_back(genExpr(a.get()));
   if (blockDone())
     return nullptr; // 引数の評価が発散
+  // String→str に強制変換される引数を {ptr,len,cap} から str {ptr,len} へ縮める
+  // (借用ビュー。元の String は呼び出し側が保持し続ける)。
+  for (size_t i = 0; i < e->argCoercedToStr.size() && i < args.size(); ++i) {
+    if (!e->argCoercedToStr[i] || !args[i])
+      continue;
+    Value *p = builder_.CreateExtractValue(args[i], {0}, "coerce.ptr");
+    Value *n = builder_.CreateExtractValue(args[i], {1}, "coerce.len");
+    auto *strTy = cast<StructType>(toLLVM(kal::Type::strTy()));
+    Value *agg = UndefValue::get(strTy);
+    agg = builder_.CreateInsertValue(agg, p, {0});
+    agg = builder_.CreateInsertValue(agg, n, {1});
+    args[i] = agg;
+  }
   if (e->variantTag >= 0) // enum バリアント構築
     return genVariant(e->type, e->variantTag, args);
   // 組み込み len(s): fat pointer {ptr, len} の len フィールドを取り出す

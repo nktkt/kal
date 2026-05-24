@@ -156,7 +156,9 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   ✅ Discarded owned temporaries at statement position are now dropped (no leak).
   ✅ String concatenation `+` (str/String → owned String) landed, leak-free for
   chains and reassignment.
-  Next: `String`→`str` coercion, then `HashMap`.
+  ✅ `String`→`str` coercion at function-call arguments landed (borrow, no move).
+  Next: `HashMap`; broaden coercion to methods/generics/returns (with the borrow
+  checker).
   (Remaining: iteration; dropping owned temporaries only *borrowed* inside a
   larger call argument, e.g. `prints(a + b)` — needs per-temporary tracking,
   naturally part of the MIR.)

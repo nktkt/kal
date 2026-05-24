@@ -1,0 +1,36 @@
+# String → str の自動変換 (借用)。
+# `str` を受け取る関数に `String` を渡すと、自動で str ビュー (借用) に変換される。
+# 借用なので呼び出し側は String を保持し続け、関数呼び出し後も使える。
+# これで「文字列を読むだけの関数」を str で書き、str リテラルでも String でも
+# 呼べる (所有 String を一々作り直さなくてよい)。
+# 逆向き (str → String) は変換されない (String は確保が要るため string() を使う)。
+
+# str を読むユーティリティ関数。
+fn shout(s: str) -> () = { prints(s); prints("!\n"); };
+fn first(s: str) -> i64 = s[0] as i64;
+
+# str リテラルで呼ぶ (従来どおり)。
+shout("literal");          # => literal!
+
+# String を渡す → 自動で借用に変換。元の String は呼び出し後も生きている。
+{
+  let g: String = string("hello");
+  shout(g);                # => hello!
+  printi(first(g));        # => 104   ('h')
+  prints(g); prints("\n"); # => hello   (g はまだ所有・使用可能)
+};
+
+# 連結で作った String もそのまま str 関数に渡せる。
+{
+  let name: String = "Grace" + " " + "Hopper";
+  shout(name);             # => Grace Hopper!
+  printi(len(name));       # => 12
+};
+
+# 借用した後でも String を別の場所へムーブできる (借用は消費しない)。
+fn consume(s: String) -> i64 = len(s);
+{
+  let s: String = string("once");
+  printi(first(s));        # => 111   ('o')  借用
+  printi(consume(s));      # => 4            ムーブ (consume が所有・解放)
+};

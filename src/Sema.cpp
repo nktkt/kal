@@ -1100,8 +1100,15 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
                                       std::to_string(e->args.size()) + ")");
     return sig.ret;
   }
+  e->argCoercedToStr.assign(e->args.size(), false);
   for (size_t i = 0; i < e->args.size(); ++i) {
     Type at = check(e->args[i].get(), sig.params[i]);
+    // String を str 仮引数に渡すと自動で借用 (str ビュー) に変換する。
+    // 呼び出し側は String を保持し続ける (ムーブしない)。
+    if (at.isString() && sig.params[i].isStr()) {
+      e->argCoercedToStr[i] = true;
+      continue;
+    }
     if (at.isKnown() && at != sig.params[i]) {
       diag_.error(e->args[i]->span, "E0104",
                   "引数の型が一致しません (期待 " + sig.params[i].str() +

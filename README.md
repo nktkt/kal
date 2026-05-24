@@ -485,9 +485,21 @@ let mut acc: String = string("");
 acc = acc + "x";                              # old buffer freed, then reassigned
 ```
 
-An implicit `String`→`str` coercion is still future work; for now pass a `String`
-where a `str` is expected only to `prints`/`len`/indexing, comparison, and `+`
-(which accept both).
+A `String` is **borrowed as a `str` automatically** when passed to a function
+parameter of type `str` — the caller keeps the `String` (it isn't moved), so a
+read-only helper can be written over `str` and called with either:
+
+```
+fn shout(s: str) = { prints(s); prints("!\n"); };
+shout("literal");
+let g: String = string("hi");
+shout(g);                   # g borrowed as str; still usable afterwards
+```
+
+This coercion applies at plain function-call arguments (not yet at methods,
+generic calls, returns, or fields); the reverse (`str` → `String`) is not
+implicit — use `string(s)`. `prints`/`len`/indexing/comparison/`+` already accept
+both `str` and `String` directly.
 
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
