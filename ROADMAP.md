@@ -157,11 +157,13 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   ✅ String concatenation `+` (str/String → owned String) landed, leak-free for
   chains and reassignment.
   ✅ `String`→`str` coercion at function-call arguments landed (borrow, no move).
+  ✅ Owned temporaries passed to borrowing operations (`prints`/`len`/`push_str`,
+  string operators, `str` params) are now dropped — `prints(a + b)` no longer
+  leaks.
   Next: `HashMap`; broaden coercion to methods/generics/returns (with the borrow
   checker).
-  (Remaining: iteration; dropping owned temporaries only *borrowed* inside a
-  larger call argument, e.g. `prints(a + b)` — needs per-temporary tracking,
-  naturally part of the MIR.)
+  (Remaining leaks, both memory-safe: an indexed/method-receiver owned temporary,
+  e.g. `(a + b)[0]` / `mk().m()`; iteration. Naturally part of the MIR.)
 - `Option<T>` / `Result<T,E>` and the `?` operator — ✅ done (prelude types +
   early `return` and `?`). (Heap-backed collections still pending.)
 - Iterators and closures.

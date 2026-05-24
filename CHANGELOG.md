@@ -5,6 +5,13 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Borrowed temporaries are dropped.** An owned-heap temporary passed to a
+  borrowing operation is now freed after that operation, closing the most common
+  remaining leaks: `prints(a + b)`, `len(make_vec())`, `push_str(s, a + b)`, and a
+  temporary `String` coerced to a `str` parameter (`f("a" + "b")`). Place
+  arguments (variables, fields) are still borrowed and kept. (Two narrow gaps
+  remain — an indexed or method-receiver temporary, e.g. `(a + b)[0]` / `mk().m()`
+  — both memory-safe.)
 - **`String` → `str` coercion (argument position).** Passing a `String` to a
   function parameter of type `str` now borrows it as a `str` view automatically
   (`{ptr,len,cap}` → `{ptr,len}`); the caller keeps the `String` (no move, no

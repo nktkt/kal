@@ -427,12 +427,14 @@ drop that element).
 
 > **Note:** an owned heap value discarded at statement position (`box(x);`,
 > `pop(v);`, a function call whose owned result you ignore) *is* freed at the end
-> of that statement. One gap remains: an owned temporary created and only
-> *borrowed* inside a larger expression — e.g. `len(make_vec())`, where the temp
-> isn't the statement's value — still leaks; bind it to a `let` first. Separately,
-> a borrow of an element (`&v[i]`) must not be held across a `push` (which may
-> reallocate); the borrow checker (future work) will enforce that. Both remaining
-> cases are memory-*safe* (a leak at worst; never a double-free).
+> of that statement, and an owned temporary passed to a borrowing operation
+> (`prints`/`len`/`push_str`, the string operators `+`/`==`/…, or a `str`
+> parameter) is freed after that operation. Two narrow gaps remain: an owned
+> temporary indexed or used as a method receiver (`(a + b)[0]`, `mk().m()`) still
+> leaks — bind it to a `let` first; and a borrow of an element (`&v[i]`) must not
+> be held across a `push` (which may reallocate). Both are memory-*safe* (a leak
+> at worst; never a double-free) and the borrow checker (future work) will close
+> them.
 
 ### Strings (`str`)
 

@@ -35,3 +35,8 @@
   prints(line); prints("\n");     # => *****
   printi(len(line));              # => 5
 };
+
+# 連結結果をそのまま借用する操作 (prints/len) に渡せる。束縛しなくても
+# 一時 String は操作後に解放される (リークしない)。
+prints("inline: " + "ok" + "\n"); # => inline: ok
+printi(len("ab" + "cde"));        # => 5

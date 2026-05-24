@@ -25,6 +25,15 @@
   printi(len(buf));            # => 10
 };
 
+# 自分自身を追記しても安全 (容量拡張でバッファが移っても正しくコピーされる)。
+{
+  let mut d: String = string("ab");
+  push_str(d, d);              # => abab
+  push_str(d, d);              # => abababab
+  prints(d); prints("\n");     # => abababab
+  printi(len(d));              # => 8
+};
+
 # String を値で受け取る関数はそれを所有する (呼び出し後は drop される)。
 fn announce(msg: String) -> () = {
   prints("[");

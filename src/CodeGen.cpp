@@ -944,10 +944,13 @@ Value *CodeGen::genCall(const CallExpr *e) {
   if (blockDone())
     return nullptr; // 引数の評価が発散
   // String→str に強制変換される引数を {ptr,len,cap} から str {ptr,len} へ縮める
-  // (借用ビュー。元の String は呼び出し側が保持し続ける)。
+  // (借用ビュー。元の String は呼び出し側が保持し続ける)。所有 String の一時値を
+  // 渡した場合 (f(a+b) 等) は、呼び出し後に解放する (借用は呼び出し中のみ有効)。
+  std::vector<std::pair<const Expr *, Value *>> coercedTemps;
   for (size_t i = 0; i < e->argCoercedToStr.size() && i < args.size(); ++i) {
     if (!e->argCoercedToStr[i] || !args[i])
       continue;
+    coercedTemps.push_back({e->args[i].get(), args[i]}); // 元の String 値を保存
     Value *p = builder_.CreateExtractValue(args[i], {0}, "coerce.ptr");
     Value *n = builder_.CreateExtractValue(args[i], {1}, "coerce.len");
     auto *strTy = cast<StructType>(toLLVM(kal::Type::strTy()));
@@ -956,17 +959,28 @@ Value *CodeGen::genCall(const CallExpr *e) {
     agg = builder_.CreateInsertValue(agg, n, {1});
     args[i] = agg;
   }
+  // 呼び出し後に coercion された一時 String を解放する (場所式は dropDiscardedValue
+  // が借用としてスキップする)。
+  auto dropCoercedTemps = [&]() {
+    for (auto &ct : coercedTemps)
+      dropDiscardedValue(ct.first, ct.second);
+  };
   if (e->variantTag >= 0) // enum バリアント構築
     return genVariant(e->type, e->variantTag, args);
   // 組み込み len(s): fat pointer {ptr, len} の len フィールドを取り出す
-  // (スライス・Vec・str いずれも添字 1 が長さ)
-  if (e->isLenBuiltin)
-    return builder_.CreateExtractValue(args[0], {1}, "len");
+  // (スライス・Vec・str いずれも添字 1 が長さ)。引数は借用なので、所有ヒープの
+  // 一時値 (len(a+b) / len(make_vec()) 等) なら使用後に解放する。
+  if (e->isLenBuiltin) {
+    Value *len = builder_.CreateExtractValue(args[0], {1}, "len");
+    dropDiscardedValue(e->args[0].get(), args[0]);
+    return len;
+  }
   // 組み込み prints(s): str/String {ptr, len, ..} を分解して kal_prints を呼ぶ
   if (e->isPrintsBuiltin) {
     Value *data = builder_.CreateExtractValue(args[0], {0}, "strptr");
     Value *len = builder_.CreateExtractValue(args[0], {1}, "strlen");
     builder_.CreateCall(module_->getFunction("kal_prints"), {data, len});
+    dropDiscardedValue(e->args[0].get(), args[0]); // 一時値 (prints(a+b) 等) を解放
     return nullptr; // unit
   }
   // 組み込み string(s): str のバイトをヒープにコピーして所有 String を作る
@@ -1003,6 +1017,7 @@ Value *CodeGen::genCall(const CallExpr *e) {
     Function *callee = ensureInstance(git->second, targs);
     CallInst *call = builder_.CreateCall(callee, args);
     kal::Type rt = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
+    dropCoercedTemps();
     if (rt.isUnit())
       return nullptr;
     call->setName("calltmp");
@@ -1010,6 +1025,7 @@ Value *CodeGen::genCall(const CallExpr *e) {
   }
   Function *callee = module_->getFunction(e->callee);
   CallInst *call = builder_.CreateCall(callee, args);
+  dropCoercedTemps();
   if (e->type.isUnit())
     return nullptr;
   call->setName("calltmp");
@@ -1382,31 +1398,45 @@ Value *CodeGen::genPushStr(const CallExpr *e) {
   Value *cap = builder_.CreateLoad(i64, capPtr, "cap");
   Value *need = builder_.CreateAdd(len, tLen, "need"); // 追記後の必要長
 
+  llvm::Type *i8 = llvm::Type::getInt8Ty(ctx_);
   Function *fn = builder_.GetInsertBlock()->getParent();
   BasicBlock *growBB = BasicBlock::Create(ctx_, "str.grow", fn);
-  BasicBlock *contBB = BasicBlock::Create(ctx_, "str.cont", fn);
+  BasicBlock *inplaceBB = BasicBlock::Create(ctx_, "str.inplace", fn);
+  BasicBlock *doneBB = BasicBlock::Create(ctx_, "str.done", fn);
   builder_.CreateCondBr(builder_.CreateICmpUGT(need, cap, "tooSmall"), growBB,
-                        contBB);
+                        inplaceBB);
 
-  // 成長: max(cap*2, need) を新容量にして realloc
+  // 成長パス: max(cap*2, need) で新バッファを malloc し、既存内容と追記分を
+  // コピーしてから旧バッファを free する。realloc を使わないのは、第 2 引数 t が
+  // 旧バッファを指す自己追記 (push_str(s, s)) で、free 前に t を読むため
+  // (realloc だと free 済みバッファを読む use-after-free になる)。
   builder_.SetInsertPoint(growBB);
   Value *dbl = builder_.CreateMul(cap, ConstantInt::get(i64, 2), "cap2");
   Value *bigger = builder_.CreateICmpUGT(need, dbl, "needBigger");
   Value *newCap = builder_.CreateSelect(bigger, need, dbl, "newcap");
   Value *oldData = builder_.CreateLoad(ptrTy, dataPtr, "olddata");
-  Value *newData = builder_.CreateCall(module_->getFunction("realloc"),
-                                       {oldData, newCap}, "newdata");
-  builder_.CreateStore(newData, dataPtr);
+  Value *newBuf =
+      builder_.CreateCall(module_->getFunction("malloc"), {newCap}, "newbuf");
+  builder_.CreateMemCpy(newBuf, MaybeAlign(1), oldData, MaybeAlign(1), len);
+  Value *gtail = builder_.CreateGEP(i8, newBuf, {len}, "gtail");
+  builder_.CreateMemCpy(gtail, MaybeAlign(1), tData, MaybeAlign(1), tLen);
+  builder_.CreateCall(module_->getFunction("free"), {oldData}); // 旧バッファ解放
+  builder_.CreateStore(newBuf, dataPtr);
   builder_.CreateStore(newCap, capPtr);
-  builder_.CreateBr(contBB);
+  builder_.CreateStore(need, lenPtr);
+  builder_.CreateBr(doneBB);
 
-  // 追記: memcpy(data + len, tData, tLen); len = need
-  builder_.SetInsertPoint(contBB);
+  // 容量内パス: 末尾にそのまま追記 (dst は現内容の後ろなので t と重ならない)。
+  builder_.SetInsertPoint(inplaceBB);
   Value *data = builder_.CreateLoad(ptrTy, dataPtr, "data");
-  Value *dst = builder_.CreateGEP(llvm::Type::getInt8Ty(ctx_), data, {len},
-                                  "tail");
+  Value *dst = builder_.CreateGEP(i8, data, {len}, "tail");
   builder_.CreateMemCpy(dst, MaybeAlign(1), tData, MaybeAlign(1), tLen);
   builder_.CreateStore(need, lenPtr);
+  builder_.CreateBr(doneBB);
+
+  builder_.SetInsertPoint(doneBB);
+  // 第 2 引数が所有 String の一時値 (push_str(s, a+b) 等) なら追記後に解放する。
+  dropDiscardedValue(e->args[1].get(), t);
   return nullptr; // unit
 }
 
