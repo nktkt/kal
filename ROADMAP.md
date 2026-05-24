@@ -162,10 +162,11 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   leaks.
   ✅ Associated functions + `::` (`Type::new(...)`) landed — constructors/factories
   on user types, generic-type args inferred from the call.
+  ✅ Method-receiver temporaries are dropped (`Type::new(…).m()` is leak-free).
   Next: `HashMap`; broaden coercion to methods/generics/returns (with the borrow
   checker).
-  (Remaining leaks, both memory-safe: an indexed/method-receiver owned temporary,
-  e.g. `(a + b)[0]` / `mk().m()`; iteration. Naturally part of the MIR.)
+  (Remaining leak, memory-safe: indexing an owned temporary, `(a + b)[0]`;
+  iteration. Naturally part of the MIR.)
 - `Option<T>` / `Result<T,E>` and the `?` operator — ✅ done (prelude types +
   early `return` and `?`). (Heap-backed collections still pending.)
 - Iterators and closures.

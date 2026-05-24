@@ -1072,6 +1072,13 @@ Value *CodeGen::genMethodCall(const MethodCallExpr *e) {
     return nullptr; // レシーバ/引数の評価が発散
   Function *callee = ensureInstance(def, targs);
   CallInst *call = builder_.CreateCall(callee, args);
+  // &self/&mut self で借用したレシーバが「所有ヒープの一時値」(場所式でない)
+  // なら、呼び出し後に解放する。値レシーバ (selfKind 0) はメソッドにムーブ済み、
+  // 参照レシーバ (recvIsRef) は別の場所が所有しているので対象外。
+  // これで Type::new(..).method() / mk().m() のレシーバ一時値がリークしない。
+  if (e->selfKind != 0 && !e->recvIsRef && !isPlaceExpr(e->receiver.get()) &&
+      needsDrop(recvT))
+    builder_.CreateCall(getDropFn(recvT), {selfArg}); // selfArg = 退避先アドレス
   kal::Type rt = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
   if (rt.isUnit())
     return nullptr;

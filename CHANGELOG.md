@@ -5,6 +5,12 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Method-receiver temporaries are dropped.** An owned-heap temporary used as a
+  `&self`/`&mut self` method receiver (`Type::new(…).m()`, `mk().m()`) is now freed
+  after the call instead of leaking — making constructor chaining leak-free. A
+  value (`self`) receiver is still moved into the method (dropped there, no
+  double-free), and a place receiver (variable/field) is left to its owner. Only
+  indexing an owned temporary (`(a + b)[0]`) still leaks (memory-safe).
 - **Associated functions and `::`.** A function in an `impl` block that takes no
   `self` is an associated function (constructor/factory), called as
   `Type::name(args)` (new `::` token). Methods and associated functions coexist in

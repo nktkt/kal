@@ -441,15 +441,15 @@ is rejected, like a slice) — read `Copy` elements, borrow, or use `pop` (which
 drop that element).
 
 > **Note:** an owned heap value discarded at statement position (`box(x);`,
-> `pop(v);`, a function call whose owned result you ignore) *is* freed at the end
-> of that statement, and an owned temporary passed to a borrowing operation
-> (`prints`/`len`/`push_str`, the string operators `+`/`==`/…, or a `str`
-> parameter) is freed after that operation. Two narrow gaps remain: an owned
-> temporary indexed or used as a method receiver (`(a + b)[0]`, `mk().m()`) still
-> leaks — bind it to a `let` first; and a borrow of an element (`&v[i]`) must not
-> be held across a `push` (which may reallocate). Both are memory-*safe* (a leak
-> at worst; never a double-free) and the borrow checker (future work) will close
-> them.
+> `pop(v);`, a call whose owned result you ignore) *is* freed at the end of that
+> statement; an owned temporary passed to a borrowing operation (`prints`/`len`/
+> `push_str`, the string operators `+`/`==`/…, a `str` parameter) is freed after
+> that operation; and an owned temporary used as a `&self`/`&mut self` method
+> receiver (`Type::new(…).m()`, `mk().m()`) is freed after the call. One narrow gap
+> remains: indexing an owned temporary (`(a + b)[0]`) still leaks — bind it to a
+> `let` first. Separately, a borrow of an element (`&v[i]`) must not be held across
+> a `push` (which may reallocate). Both are memory-*safe* (a leak at worst; never a
+> double-free) and the borrow checker (future work) will close them.
 
 ### Strings (`str`)
 

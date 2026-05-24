@@ -39,3 +39,12 @@ impl Buf {
   push(b.data, 20);
   printi(len(b.data));      # => 2
 };
+
+# コンストラクタの結果に直接メソッドを呼べる (Type::new(..).method())。
+# 一時値のレシーバ (ここでは String を持つ Tag) は呼び出し後に自動解放される。
+struct Tag { name: String }
+impl Tag {
+  fn of(s: str) -> Tag = Tag { name: string(s) };
+  fn size(&self) -> i64 = len(self.name);
+}
+printi(Tag::of("hello").size());   # => 5   (一時 Tag は解放される・リークなし)
