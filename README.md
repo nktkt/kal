@@ -425,11 +425,14 @@ is rejected, like a slice) — read `Copy` elements, borrow, or use `pop` (which
 *is* the way to move an element out: it shrinks the length so the `Vec` won't also
 drop that element).
 
-> **Note:** an owned heap value (`Box`/`Vec`) that is produced but never bound to
-> a name (a discarded *temporary*) is not yet freed — bind it to a `let` to have
-> it dropped. Also, a borrow of an element (`&v[i]`) must not be held across a
-> `push` (which may reallocate); the borrow checker (future work) will enforce
-> this. Both are memory-*safe* (a temporary leaks; neither double-frees).
+> **Note:** an owned heap value discarded at statement position (`box(x);`,
+> `pop(v);`, a function call whose owned result you ignore) *is* freed at the end
+> of that statement. One gap remains: an owned temporary created and only
+> *borrowed* inside a larger expression — e.g. `len(make_vec())`, where the temp
+> isn't the statement's value — still leaks; bind it to a `let` first. Separately,
+> a borrow of an element (`&v[i]`) must not be held across a `push` (which may
+> reallocate); the borrow checker (future work) will enforce that. Both remaining
+> cases are memory-*safe* (a leak at worst; never a double-free).
 
 ### Strings (`str`)
 

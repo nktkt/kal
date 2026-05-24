@@ -5,6 +5,14 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **Discarded temporaries are dropped.** An owned-heap value produced at statement
+  position and thrown away — `box(x);`, `string(x);`, `pop(v);`, or a call whose
+  owned result is ignored — is now freed at the end of that statement instead of
+  leaking. Only genuine *temporaries* (non-place expressions) are dropped, so a
+  value moved into a consuming position (a function argument, field, `Vec`
+  element, `let`) is left to its new owner — no double-free. (Still leaking: an
+  owned temporary merely *borrowed* inside a larger expression, e.g.
+  `len(make_vec())`; bind it to a `let` first.)
 - **`Vec` removal: `pop` and `clear`.** `pop(v) -> Option<T>` removes and returns
   the last element (`None` when empty); it shrinks the length first, so ownership
   moves to the caller and the `Vec` won't also drop that element — this is the

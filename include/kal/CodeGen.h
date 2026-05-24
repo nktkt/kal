@@ -78,6 +78,8 @@ private:
   // needsDrop(t) なら i1 フラグ (初期 true) を作って積み、戻り値とする。
   void registerLocal(llvm::Value *slot, const Type &t);
   void emitDrop(llvm::Value *slot, llvm::Value *flag, const Type &t); // flag 立ちで drop
+  // 捨てられる式文の値が所有ヒープを持つ一時値なら drop する (リーク防止)
+  void dropDiscardedValue(const Expr *e, llvm::Value *v);
   void popDropScope();        // 現スコープの全ローカルを (逆順で) drop して pop
   void dropAllScopesForExit(); // return 用: 全スコープを drop (pop はしない)
   // enum バリアント構築 (具体化された enum 型 + tag + ペイロード)

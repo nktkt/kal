@@ -358,6 +358,36 @@ Value *CodeGen::genIndex(const IndexExpr *e) {
   return builder_.CreateLoad(toLLVM(e->type), addr, "idxval"); // 読み出す
 }
 
+// 場所 (lvalue) 式か。場所の値は他に所有者がいる (変数・フィールド等) ので、
+// 捨てても drop してはいけない。それ以外は新しく作られた一時値とみなす。
+static bool isPlaceExpr(const Expr *e) {
+  switch (e->kind) {
+  case Expr::Kind::Variable:
+    return static_cast<const VariableExpr *>(e)->variantTag < 0; // 変数は場所
+  case Expr::Kind::Field:
+  case Expr::Kind::TupleIndex:
+  case Expr::Kind::Index:
+  case Expr::Kind::Deref:
+    return true;
+  default:
+    return false; // Call / 構築 / if / match などは一時値
+  }
+}
+
+// 捨てられる式文の値が「所有ヒープを持つ一時値」なら drop する。
+// 一時値は新規に作られた所有値で他に所有者がいないため、ここで解放しても
+// 二重解放にならない (場所式は除外。`box(x);` / `pop(v);` などのリークを防ぐ)。
+void CodeGen::dropDiscardedValue(const Expr *e, llvm::Value *v) {
+  if (!v || blockDone() || isPlaceExpr(e))
+    return;
+  kal::Type t = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
+  if (!needsDrop(t))
+    return;
+  AllocaInst *slot = entryAlloca(toLLVM(t), "discard");
+  builder_.CreateStore(v, slot);
+  builder_.CreateCall(getDropFn(t), {slot});
+}
+
 Value *CodeGen::genBlock(const BlockExpr *e) {
   std::vector<std::pair<std::string, Value *>> saved; // name, oldSlot(or null)
   dropScopes_.push_back({});                          // ブロックのドロップスコープ
@@ -374,9 +404,10 @@ Value *CodeGen::genBlock(const BlockExpr *e) {
       namedValues_[st.name] = slot;
       registerLocal(slot, st.expr->type); // ドロップ対象なら登録
     } else {
-      genExpr(st.expr.get()); // 式文: 値は捨てる
+      Value *sv = genExpr(st.expr.get()); // 式文: 値は捨てる
       if (blockDone())
         break; // 文が発散 → 以降は到達不能
+      dropDiscardedValue(st.expr.get(), sv); // 一時値が所有ヒープなら解放
     }
   }
   Value *result =
@@ -1550,7 +1581,8 @@ Value *CodeGen::genFor(const ForExpr *e) {
   builder_.CreateCondBr(condV, bodyBB, afterBB);
 
   builder_.SetInsertPoint(bodyBB);
-  genExpr(e->body.get()); // 値は捨てる
+  Value *bodyV = genExpr(e->body.get()); // 値は捨てる
+  dropDiscardedValue(e->body.get(), bodyV); // 本体の一時値が所有ヒープなら解放
 
   // 本体が発散 (return) していなければ、加算してループ先頭へ戻る
   if (!blockDone()) {
@@ -1763,6 +1795,8 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
     } else if (t.isBool()) {
       Value *i = builder_.CreateZExt(v, i64, "pb");
       builder_.CreateCall(printiFn, {i});
+    } else {
+      dropDiscardedValue(e.get(), v); // 所有ヒープの一時値なら解放
     }
   }
   builder_.CreateRetVoid();

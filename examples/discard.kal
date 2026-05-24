@@ -1,0 +1,43 @@
+# 捨てられる一時値の自動解放。
+# 所有ヒープ (Box / Vec / String) を作ったが名前に束縛しない「式文の一時値」は、
+# その文の終わりで自動的に drop される (リークしない)。
+#   box(x);        作ってすぐ捨てる Box → 解放される
+#   pop(v);        戻り値 Option<T> を捨てても、中の要素は解放される
+#   f();           所有値を返す関数を副作用目的で呼んで結果を捨てる → 解放される
+# 一方、関数引数・フィールド・要素に「ムーブして渡した」一時値は受け取り側が
+# 所有するので二重に解放されることはない。
+
+fn make_tag(n: i64) -> String = {
+  let mut s: String = string("tag-");
+  push_str(s, "n");
+  s            # 所有 String を返す
+};
+
+# 戻り値を束縛せず捨てる: その String は文末で解放される (リークしない)。
+make_tag(1);
+
+# pop の戻り値を捨てても、取り出した要素は解放される。
+{
+  let mut v: Vec<Box<i64>> = vec();
+  push(v, box(10)); push(v, box(20));
+  pop(v);                  # 取り出した box(20) は捨てられるが解放される
+  printi(len(v));          # => 1   (残り box(10) は Vec の Drop で解放)
+};
+
+# 一時値をムーブで渡す側は二重解放にならない (受け取り側が所有・解放)。
+fn consume(s: String) -> () = { prints(s); prints("\n"); };
+consume(make_tag(2));      # make_tag の戻り値を consume にムーブ → consume が解放
+
+# for ループ本体で一時値を捨てても、各反復で解放される (累積リークしない)。
+{
+  let mut v: Vec<Box<i64>> = vec();
+  push(v, box(1)); push(v, box(2)); push(v, box(3));
+  for i = 0, i < 3, 1 in pop(v);   # 取り出した box を毎回捨てるが解放される
+  printi(len(v));          # => 0
+};
+
+# 普通に束縛して使う分にはこれまでどおり。
+{
+  let s: String = make_tag(3);
+  prints(s); prints("\n");
+};
