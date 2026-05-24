@@ -75,7 +75,8 @@ Expressions of type `()` (unit) — loops and the print built-ins — print noth
 **generic** (`Name<T, …>`, with `Option<T>` / `Result<T, E>` built in) —
 **tuples** `(T, U, …)`, **arrays** `[T; N]`, **slices** `&[T]` / `&mut [T]`,
 **references** `&T` / `&mut T`, the heap-allocated **`Box<T>`**, the growable
-**`Vec<T>`**, string slices **`str`**, and the owned **`String`**.
+**`Vec<T>`**, string slices **`str`**, the owned **`String`**, and
+**`HashMap<K, V>`**.
 Integer literals default to **i32**, float literals to **f64**, but a literal
 takes its type from context (e.g. `2` is `i64` in `n < 2` when `n: i64`).
 Boolean literals are `true` and `false`.
@@ -518,6 +519,27 @@ generic calls, returns, or fields); the reverse (`str` → `String`) is not
 implicit — use `string(s)`. `prints`/`len`/indexing/comparison/`+` already accept
 both `str` and `String` directly.
 
+### `HashMap<K, V>`
+
+A hash map (open addressing, growing automatically). Keys `K` are integers,
+`bool`, or `str`; values `V` must be `Copy` (so `get` can return them by value).
+`str` keys are copied into the map (it owns them) and freed on drop.
+
+```
+let mut counts: HashMap<str, i64> = hashmap();
+insert(counts, "apple", 1);
+insert(counts, "apple", 3);          # overwrites
+get(counts, "apple");                # => Some(3)
+get(counts, "kiwi");                 # => None
+contains(counts, "apple");           # => true
+len(counts);                         # => 1
+```
+
+`insert(m, …)` needs a mutable `HashMap`; `insert`/`get`/`contains` borrow the
+map and the key (nothing is moved). An owned `String` is accepted where a `str`
+key is expected (it's copied in / borrowed for lookup). A `String` *value* isn't
+allowed yet (values must be `Copy`).
+
 ### Built-ins
 - `printi(x: i64)` — print an integer on its own line
 - `printd(x: f64)` — print a float on its own line
@@ -531,6 +553,10 @@ both `str` and `String` directly.
 - `clear(v: Vec<T>)` — drop all elements, set length to 0 (keeps capacity)
 - `string(s: str) -> String` — copy a `str` into an owned heap `String`
 - `push_str(s: String, t: str)` — append a `str` to a mutable `String`
+- `hashmap() -> HashMap<K, V>` — a new empty hash map (types from context)
+- `insert(m: HashMap<K,V>, k: K, v: V)` — insert/overwrite in a mutable map
+- `get(m: HashMap<K,V>, k: K) -> Option<V>` — look up a key
+- `contains(m: HashMap<K,V>, k: K) -> bool` — whether a key is present
 
 ### Comments
 `#` to end of line.

@@ -1,0 +1,2 @@
+# insert needs a mutable HashMap.
+{ let m: HashMap<str, i64> = hashmap(); insert(m, "k", 1); };

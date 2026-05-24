@@ -1,0 +1,6 @@
+error[E0283]: HashMap の値は Copy 型である必要があります (実際 String)
+ --> tests/diagnostics/hashmap_noncopy_value.kal:2:33
+  |
+2 | { let m: HashMap<str, String> = hashmap(); printi(len(m)); };
+  |                                 ^^^^^^^^^
+1 個のエラーで中断しました

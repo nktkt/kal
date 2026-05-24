@@ -291,6 +291,11 @@ struct CallExpr : Expr {
   bool isPopBuiltin = false;
   // Sema が、これが組み込み clear(v) なら設定する (全要素を drop して空にする)
   bool isClearBuiltin = false;
+  // Sema が設定する HashMap 組み込み: hashmap()/insert(m,k,v)/get(m,k)/contains(m,k)
+  bool isMapNewBuiltin = false;
+  bool isInsertBuiltin = false;
+  bool isMapGetBuiltin = false;
+  bool isContainsBuiltin = false;
   // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
   std::vector<Type> typeArgs;
   // Sema が、各引数を String→str に強制変換 (借用) するかを設定する。

@@ -26,6 +26,9 @@ Type Sema::resolve(Type t) const {
   // 組み込み Vec<T>
   if (t.kind == Type::Kind::Struct && t.name == "Vec" && t.elems.size() == 1)
     return Type::vecTy(resolve(t.elems[0]));
+  // 組み込み HashMap<K, V>
+  if (t.kind == Type::Kind::Struct && t.name == "HashMap" && t.elems.size() == 2)
+    return Type::mapTy(resolve(t.elems[0]), resolve(t.elems[1]));
   // 検査中のジェネリック関数の型引数名は Param へ (本体の let/as 注釈用)
   if (t.kind == Type::Kind::Struct && activeTypeParams_.count(t.name))
     return Type::paramTy(t.name);
@@ -131,6 +134,7 @@ static bool isCopyType(const Type &t) {
   case Type::Kind::Float:
   case Type::Kind::Bool:
   case Type::Kind::Unit:
+  case Type::Kind::Str:     // str は静的データへの借用ビュー (Copy)
   case Type::Kind::Unknown:
     return true;
   case Type::Kind::Ref:
@@ -139,8 +143,14 @@ static bool isCopyType(const Type &t) {
   case Type::Kind::Array:
     return isCopyType(t.elems[0]);
   default:
-    return false; // Struct/Enum/Tuple/Box/Param は move
+    return false; // Struct/Enum/Tuple/Box/Vec/String/Map/Param は move
   }
+}
+
+// HashMap のキーにできる型か (ハッシュ・等価比較が可能)。
+// 整数・bool は inline 値、str はバイト列 (内部で所有コピー) を比較する。
+static bool isHashableKey(const Type &t) {
+  return t.isInt() || t.isBool() || t.isStr();
 }
 
 // 型 t が「値として」含む struct/enum 名を集める (無限サイズ検出用)。
@@ -174,6 +184,8 @@ bool Sema::run(Program &program) {
       diag_.error(sd->nameSpan, "E0052", "str は組み込み型です");
     if (sd->name == "String")
       diag_.error(sd->nameSpan, "E0258", "String は組み込み型です");
+    if (sd->name == "HashMap")
+      diag_.error(sd->nameSpan, "E0280", "HashMap は組み込み型です");
     if (structs_.count(sd->name))
       diag_.error(sd->nameSpan, "E0045", "構造体が重複定義されています");
     structs_[sd->name] = sd.get();
@@ -187,6 +199,8 @@ bool Sema::run(Program &program) {
       diag_.error(ed->nameSpan, "E0052", "str は組み込み型です");
     if (ed->name == "String")
       diag_.error(ed->nameSpan, "E0258", "String は組み込み型です");
+    if (ed->name == "HashMap")
+      diag_.error(ed->nameSpan, "E0280", "HashMap は組み込み型です");
     if (enums_.count(ed->name) || structs_.count(ed->name))
       diag_.error(ed->nameSpan, "E0085", "型名が重複しています");
     enums_[ed->name] = ed.get();
@@ -825,10 +839,11 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
       return Type::intTy(64, true);
     }
     Type at = check(e->args[0].get(), std::nullopt);
-    if (at.isKnown() && !at.isSlice() && !at.isVec() && !at.isStringish())
+    if (at.isKnown() && !at.isSlice() && !at.isVec() && !at.isStringish() &&
+        !at.isMap())
       diag_.error(e->args[0]->span, "E0109",
-                  "len の引数はスライス・Vec・str・String である必要があります "
-                  "(実際 " +
+                  "len の引数はスライス・Vec・str・String・HashMap である必要が"
+                  "あります (実際 " +
                       at.str() + ")");
     return Type::intTy(64, true);
   }
@@ -1000,6 +1015,118 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
                   "clear の引数は可変な場所である必要があります "
                   "(`let mut v` で宣言してください)");
     return Type::unit();
+  }
+
+  // 組み込み hashmap() -> HashMap<K,V> (空。型は期待型から)
+  if (e->callee == "hashmap" && !funcs_.count("hashmap")) {
+    e->isMapNewBuiltin = true;
+    if (!e->args.empty()) {
+      diag_.error(e->span, "E0281", "hashmap は引数を取りません");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+    }
+    if (!(expected && expected->isMap())) {
+      diag_.error(e->span, "E0281",
+                  "hashmap の型を推論できません (`let m: HashMap<K,V> = "
+                  "hashmap();` のように型注釈を付けてください)");
+      return Type::unknown();
+    }
+    if (!isHashableKey(expected->keyType()))
+      diag_.error(e->span, "E0282",
+                  "HashMap のキーにできるのは整数・bool・str です (実際 " +
+                      expected->keyType().str() + ")");
+    if (!isCopyType(expected->valType()))
+      diag_.error(e->span, "E0283",
+                  "HashMap の値は Copy 型である必要があります (実際 " +
+                      expected->valType().str() + ")");
+    return *expected;
+  }
+
+  // 組み込み insert(m, k, v) -> () (可変 HashMap に k→v を挿入/上書き)
+  if (e->callee == "insert" && !funcs_.count("insert")) {
+    e->isInsertBuiltin = true;
+    if (e->args.size() != 3) {
+      diag_.error(e->span, "E0284",
+                  "insert には引数が 3 つ必要です (insert(m, k, v)。実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unit();
+    }
+    Type mt = check(e->args[0].get(), std::nullopt);
+    if (mt.isKnown() && !mt.isMap()) {
+      diag_.error(e->args[0]->span, "E0285",
+                  "insert の第 1 引数は HashMap である必要があります (実際 " +
+                      mt.str() + ")");
+      check(e->args[1].get(), std::nullopt);
+      check(e->args[2].get(), std::nullopt);
+      return Type::unit();
+    }
+    if (mt.isMap() && !isMutablePlace(e->args[0].get()))
+      diag_.error(e->args[0]->span, "E0286",
+                  "insert の第 1 引数は可変な場所である必要があります "
+                  "(`let mut m` で宣言してください)");
+    // キー: str キーには str/String を、それ以外は K 型を期待
+    std::optional<Type> kh =
+        mt.isMap() ? std::optional<Type>(mt.keyType()) : std::nullopt;
+    Type kt = check(e->args[1].get(), kh);
+    if (mt.isMap()) {
+      bool kOk = kt == mt.keyType() ||
+                 (mt.keyType().isStr() && kt.isStringish());
+      if (kt.isKnown() && !kOk)
+        diag_.error(e->args[1]->span, "E0287",
+                    "キーの型が一致しません (期待 " + mt.keyType().str() +
+                        ", 実際 " + kt.str() + ")");
+    }
+    std::optional<Type> vh =
+        mt.isMap() ? std::optional<Type>(mt.valType()) : std::nullopt;
+    Type vt = check(e->args[2].get(), vh);
+    if (mt.isMap() && vt.isKnown() && vt != mt.valType())
+      diag_.error(e->args[2]->span, "E0288",
+                  "値の型が一致しません (期待 " + mt.valType().str() +
+                      ", 実際 " + vt.str() + ")");
+    return Type::unit();
+  }
+
+  // 組み込み get(m, k) -> Option<V> / contains(m, k) -> bool
+  if ((e->callee == "get" && !funcs_.count("get")) ||
+      (e->callee == "contains" && !funcs_.count("contains"))) {
+    bool isGet = e->callee == "get";
+    if (isGet)
+      e->isMapGetBuiltin = true;
+    else
+      e->isContainsBuiltin = true;
+    Type ret = isGet ? Type::unknown() : Type::boolean();
+    if (e->args.size() != 2) {
+      diag_.error(e->span, "E0289",
+                  e->callee + " には引数が 2 つ必要です (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return ret;
+    }
+    Type mt = check(e->args[0].get(), std::nullopt);
+    if (mt.isKnown() && !mt.isMap()) {
+      diag_.error(e->args[0]->span, "E0290",
+                  e->callee + " の第 1 引数は HashMap である必要があります "
+                  "(実際 " + mt.str() + ")");
+      check(e->args[1].get(), std::nullopt);
+      return ret;
+    }
+    std::optional<Type> kh =
+        mt.isMap() ? std::optional<Type>(mt.keyType()) : std::nullopt;
+    Type kt = check(e->args[1].get(), kh);
+    if (mt.isMap()) {
+      bool kOk = kt == mt.keyType() ||
+                 (mt.keyType().isStr() && kt.isStringish());
+      if (kt.isKnown() && !kOk)
+        diag_.error(e->args[1]->span, "E0287",
+                    "キーの型が一致しません (期待 " + mt.keyType().str() +
+                        ", 実際 " + kt.str() + ")");
+      if (isGet)
+        return Type::enumTy("Option", {mt.valType()});
+    }
+    return ret;
   }
 
   // 組み込み box(e) -> Box<T> (ユーザーが box を定義していなければ)

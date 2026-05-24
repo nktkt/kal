@@ -1,0 +1,3 @@
+# hashmap() needs an expected HashMap<K,V> type to infer K and V.
+fn f() -> i64 = { let m = hashmap(); 0 };
+printi(f());

@@ -5,6 +5,16 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **`HashMap<K, V>`.** A hash map (open addressing, linear probing, auto-growing
+  at 0.75 load via rehash). Keys are integers, `bool`, or `str`; values must be
+  `Copy`. `hashmap()` creates one (types from the annotation), `insert(m, k, v)`
+  inserts/overwrites into a mutable map, `get(m, k)` returns `Option<V>`,
+  `contains(m, k)` returns `bool`, and `len(m)` is the entry count. `str` keys are
+  copied into the map (owned) and freed on Drop; rehash transfers keys without
+  re-copying. `insert`/`get`/`contains` borrow the map and key. Per-(K,V)
+  operations are generated helpers; `str` keys hash via FNV-1a (`kal_hash`).
+  Verified leak-free and double-free free (incl. heavy rehashing of `str` keys),
+  JIT and AOT agree. Diagnostics `E0280`–`E0290`.
 - **Method-receiver temporaries are dropped.** An owned-heap temporary used as a
   `&self`/`&mut self` method receiver (`Type::new(…).m()`, `mk().m()`) is now freed
   after the call instead of leaking — making constructor chaining leak-free. A

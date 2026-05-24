@@ -1,0 +1,2 @@
+# HashMap values must be Copy (String is owned, not Copy).
+{ let m: HashMap<str, String> = hashmap(); printi(len(m)); };

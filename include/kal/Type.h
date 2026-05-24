@@ -11,7 +11,7 @@ namespace kal {
 struct Type {
   enum class Kind {
     Unknown, Unit, Bool, Int, Float, Struct, Tuple, Enum, Ref, Array, Slice,
-    Param, Box, Vec, Str, String
+    Param, Box, Vec, Str, String, Map
   };
   Kind kind = Kind::Unknown;
   unsigned bits = 0;        // Int: 8/16/32/64, Float: 32/64, Bool: 1
@@ -72,6 +72,13 @@ struct Type {
   }
   static Type strTy() { return {Kind::Str}; }
   static Type stringTy() { return {Kind::String}; }
+  static Type mapTy(Type k, Type v) {
+    Type t;
+    t.kind = Kind::Map;
+    t.elems.push_back(std::move(k)); // elems[0] = キー型, elems[1] = 値型
+    t.elems.push_back(std::move(v));
+    return t;
+  }
   static Type refTy(Type pointee, bool mut) {
     Type t;
     t.kind = Kind::Ref;
@@ -109,6 +116,9 @@ struct Type {
   bool isVec() const { return kind == Kind::Vec; }
   bool isStr() const { return kind == Kind::Str; }
   bool isString() const { return kind == Kind::String; }
+  bool isMap() const { return kind == Kind::Map; }
+  const Type &keyType() const { return elems[0]; }   // Map のとき有効
+  const Type &valType() const { return elems[1]; }   // Map のとき有効
   // str / String はどちらもバイト列ビュー (添字 0=ptr, 1=len が共通)
   bool isStringish() const { return kind == Kind::Str || kind == Kind::String; }
   const Type &boxedType() const { return elems[0]; } // Box のとき有効
@@ -141,6 +151,8 @@ struct Type {
     case Kind::Box:
     case Kind::Vec:
       return elems[0] == o.elems[0];
+    case Kind::Map:
+      return elems[0] == o.elems[0] && elems[1] == o.elems[1];
     default:
       return true;
     }

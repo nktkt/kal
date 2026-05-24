@@ -1,0 +1,6 @@
+error[E0286]: insert の第 1 引数は可変な場所である必要があります (`let mut m` で宣言してください)
+ --> tests/diagnostics/insert_immutable.kal:2:48
+  |
+2 | { let m: HashMap<str, i64> = hashmap(); insert(m, "k", 1); };
+  |                                                ^
+1 個のエラーで中断しました

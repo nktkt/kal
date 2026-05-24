@@ -58,6 +58,18 @@ private:
   llvm::Value *genClear(const CallExpr *e);   // 組み込み clear(v): 全要素 drop して空に
   llvm::Value *genStringLit(const StringLitExpr *e); // "..." → {ptr, len}
   llvm::Value *genPushStr(const CallExpr *e);        // push_str(s, t): str を追記
+  // --- HashMap<K,V> ---
+  llvm::StructType *mapSlotTy(const Type &mapType); // { i8 occ, K key, V val }
+  // 操作ヘルパ (op: 0=grow, 1=insert, 2=get) を (K,V) ごとに遅延生成する。
+  llvm::Function *getMapFn(const Type &mapType, int op);
+  void genMapFnBody(const Type &mapType, int op, llvm::Function *fn);
+  // K のハッシュ値 (i64) と等価比較 (i1) を生成する (キー型ごと)。
+  llvm::Value *genKeyHash(const Type &keyT, llvm::Value *keyPtr);
+  llvm::Value *genKeyEq(const Type &keyT, llvm::Value *aPtr, llvm::Value *bPtr);
+  llvm::Value *genMapNew(const CallExpr *e);   // hashmap()
+  llvm::Value *genInsert(const CallExpr *e);   // insert(m, k, v)
+  llvm::Value *genMapGet(const CallExpr *e);   // get(m, k) -> Option<V>
+  llvm::Value *genContains(const CallExpr *e); // contains(m, k) -> bool
   // 現在のブロックが終端命令を持つ (return 等で発散した) か。
   bool blockDone();
   llvm::Value *genMatch(const MatchExpr *e);
@@ -140,6 +152,9 @@ private:
   std::map<std::string, llvm::Function *> dropFns_; // マングル名 → drop_T
   std::vector<std::pair<Type, llvm::Function *>> pendingDropFns_; // 本体生成待ち
   std::vector<std::vector<DropEntry>> dropScopes_;                // スコープ stack
+  // HashMap 操作ヘルパ: マングル名 → 関数、本体生成待ちキュー (op, 型, 関数)。
+  std::map<std::string, llvm::Function *> mapFns_;
+  std::vector<std::tuple<Type, int, llvm::Function *>> pendingMapFns_;
 };
 
 } // namespace kal

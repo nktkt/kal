@@ -50,6 +50,7 @@ bool CodeGen::needsDrop(const kal::Type &t) {
   case kal::Type::Kind::Box:
   case kal::Type::Kind::Vec:
   case kal::Type::Kind::String:
+  case kal::Type::Kind::Map:
     return true; // ヒープを所有する (再帰せず即 true → 無限再帰しない)
   case kal::Type::Kind::Tuple:
   case kal::Type::Kind::Array:
@@ -137,6 +138,8 @@ llvm::Type *CodeGen::toLLVM(const kal::Type &rawT) {
         ctx_, {PointerType::getUnqual(ctx_), llvm::Type::getInt64Ty(ctx_)});
   case kal::Type::Kind::String:
     return vecLLVMTy(); // String = 所有バイトバッファ { ptr, i64 len, i64 cap }
+  case kal::Type::Kind::Map:
+    return vecLLVMTy(); // HashMap = { slot* table, i64 len(=要素数), i64 cap(=スロット数) }
   case kal::Type::Kind::Unknown:
     return nullptr;
   }
@@ -938,6 +941,14 @@ Value *CodeGen::genCall(const CallExpr *e) {
     return genClear(e); // clear(v): v を場所として扱う
   if (e->isPushStrBuiltin)
     return genPushStr(e); // push_str(s, t): s を場所として扱う
+  if (e->isMapNewBuiltin)
+    return genMapNew(e);
+  if (e->isInsertBuiltin)
+    return genInsert(e); // insert(m,k,v): m を場所として扱う
+  if (e->isMapGetBuiltin)
+    return genMapGet(e);
+  if (e->isContainsBuiltin)
+    return genContains(e);
   std::vector<Value *> args;
   for (auto &a : e->args)
     args.push_back(genExpr(a.get()));
@@ -1134,6 +1145,48 @@ void CodeGen::genDropBody(const kal::Type &t, llvm::Function *fn) {
         PointerType::getUnqual(ctx_), builder_.CreateStructGEP(vt, p, 0, "sp"),
         "sdata");
     builder_.CreateCall(module_->getFunction("free"), {data});
+  } else if (t.isMap()) {
+    // HashMap: str キーは所有コピーなので各占有スロットのキーを free。
+    // (値 V は Copy なので drop 不要)。最後に表を free する。
+    StructType *vt = vecLLVMTy();
+    StructType *slotTy = mapSlotTy(t);
+    llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+    Value *table = builder_.CreateLoad(
+        ptrTy, builder_.CreateStructGEP(vt, p, 0, "mtp"), "mtable");
+    if (t.keyType().isStr()) {
+      Value *cap = builder_.CreateLoad(
+          i64, builder_.CreateStructGEP(vt, p, 2, "mcp"), "mcap");
+      auto *st = cast<StructType>(toLLVM(t.keyType()));
+      AllocaInst *iSlot = builder_.CreateAlloca(i64, nullptr, "i");
+      builder_.CreateStore(ConstantInt::get(i64, 0), iSlot);
+      BasicBlock *cond = BasicBlock::Create(ctx_, "mdrop.cond", fn);
+      BasicBlock *body = BasicBlock::Create(ctx_, "mdrop.body", fn);
+      BasicBlock *kill = BasicBlock::Create(ctx_, "mdrop.kill", fn);
+      BasicBlock *next = BasicBlock::Create(ctx_, "mdrop.next", fn);
+      BasicBlock *end = BasicBlock::Create(ctx_, "mdrop.end", fn);
+      builder_.CreateBr(cond);
+      builder_.SetInsertPoint(cond);
+      Value *i = builder_.CreateLoad(i64, iSlot, "i");
+      builder_.CreateCondBr(builder_.CreateICmpULT(i, cap), body, end);
+      builder_.SetInsertPoint(body);
+      Value *slot = builder_.CreateGEP(slotTy, table, {i}, "slot");
+      Value *occ = builder_.CreateLoad(
+          llvm::Type::getInt8Ty(ctx_),
+          builder_.CreateStructGEP(slotTy, slot, 0), "occ");
+      builder_.CreateCondBr(
+          builder_.CreateICmpNE(occ, ConstantInt::get(llvm::Type::getInt8Ty(ctx_), 0)),
+          kill, next);
+      builder_.SetInsertPoint(kill);
+      Value *keyF = builder_.CreateStructGEP(slotTy, slot, 1);
+      Value *kbuf = builder_.CreateLoad(ptrTy, builder_.CreateStructGEP(st, keyF, 0));
+      builder_.CreateCall(module_->getFunction("free"), {kbuf});
+      builder_.CreateBr(next);
+      builder_.SetInsertPoint(next);
+      builder_.CreateStore(builder_.CreateAdd(i, ConstantInt::get(i64, 1)), iSlot);
+      builder_.CreateBr(cond);
+      builder_.SetInsertPoint(end);
+    }
+    builder_.CreateCall(module_->getFunction("free"), {table}); // 表 (null も安全)
   } else if (t.isTuple() || t.isArray()) {
     llvm::Type *aggTy = toLLVM(t);
     size_t n = t.isArray() ? t.arrayLen : t.elems.size();
@@ -1460,6 +1513,423 @@ Value *CodeGen::genPushStr(const CallExpr *e) {
   // 第 2 引数が所有 String の一時値 (push_str(s, a+b) 等) なら追記後に解放する。
   dropDiscardedValue(e->args[1].get(), t);
   return nullptr; // unit
+}
+
+// ===== HashMap<K,V> =====
+// 表現: { slot* table, i64 len(要素数), i64 cap(スロット数) }。
+// slot = { i8 occ, K key, V val }。table は calloc で 0 埋め (occ=0=空)。
+// オープンアドレッシング (線形探索)。削除なしなので tombstone 不要。
+
+// (K,V) ごとのスロット型 { i8 occ, K, V }。
+StructType *CodeGen::mapSlotTy(const kal::Type &mapType) {
+  return StructType::get(ctx_, {llvm::Type::getInt8Ty(ctx_),
+                                toLLVM(mapType.keyType()),
+                                toLLVM(mapType.valType())});
+}
+
+// キー (keyPtr が指す K) のハッシュ値 (i64)。
+llvm::Value *CodeGen::genKeyHash(const kal::Type &keyT, llvm::Value *keyPtr) {
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  if (keyT.isStr()) { // str: バイト列を FNV-1a (kal_hash)
+    auto *st = cast<StructType>(toLLVM(keyT));
+    Value *p = builder_.CreateLoad(
+        PointerType::getUnqual(ctx_), builder_.CreateStructGEP(st, keyPtr, 0),
+        "khp");
+    Value *n = builder_.CreateLoad(i64, builder_.CreateStructGEP(st, keyPtr, 1),
+                                   "khn");
+    return builder_.CreateCall(module_->getFunction("kal_hash"), {p, n}, "kh");
+  }
+  // 整数・bool: 値を i64 に拡張して使う (ハッシュ品質より正しさ優先)
+  Value *v = builder_.CreateLoad(toLLVM(keyT), keyPtr, "kv");
+  return builder_.CreateZExt(v, i64, "kh");
+}
+
+// 2 つのキー (aPtr, bPtr が指す K) が等しいか (i1)。
+llvm::Value *CodeGen::genKeyEq(const kal::Type &keyT, llvm::Value *aPtr,
+                               llvm::Value *bPtr) {
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  if (keyT.isStr()) {
+    auto *st = cast<StructType>(toLLVM(keyT));
+    llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+    Value *ap = builder_.CreateLoad(ptrTy, builder_.CreateStructGEP(st, aPtr, 0));
+    Value *an = builder_.CreateLoad(i64, builder_.CreateStructGEP(st, aPtr, 1));
+    Value *bp = builder_.CreateLoad(ptrTy, builder_.CreateStructGEP(st, bPtr, 0));
+    Value *bn = builder_.CreateLoad(i64, builder_.CreateStructGEP(st, bPtr, 1));
+    // minlen バイトだけ比較 (OOB 回避) し、長さも一致して初めて等しい
+    Value *minlen =
+        builder_.CreateSelect(builder_.CreateICmpULT(an, bn), an, bn, "minlen");
+    Value *m = builder_.CreateCall(module_->getFunction("memcmp"),
+                                   {ap, bp, minlen}, "kcmp");
+    Value *lenEq = builder_.CreateICmpEQ(an, bn);
+    Value *byteEq =
+        builder_.CreateICmpEQ(m, ConstantInt::get(builder_.getInt32Ty(), 0));
+    return builder_.CreateAnd(lenEq, byteEq, "keyeq");
+  }
+  Value *a = builder_.CreateLoad(toLLVM(keyT), aPtr);
+  Value *b = builder_.CreateLoad(toLLVM(keyT), bPtr);
+  return builder_.CreateICmpEQ(a, b, "keyeq");
+}
+
+// (K,V,op) ごとの操作ヘルパを宣言し (未生成なら) 本体生成キューへ積む。
+// op: 0=grow(ptr m), 1=insert(ptr m, ptr k, ptr v), 2=get(ptr m, ptr k, ptr out)->i1
+llvm::Function *CodeGen::getMapFn(const kal::Type &mapType, int op) {
+  std::string mangled =
+      "map$" + std::to_string(op) + "$" + mapType.str();
+  auto it = mapFns_.find(mangled);
+  if (it != mapFns_.end())
+    return it->second;
+  llvm::Type *voidTy = llvm::Type::getVoidTy(ctx_);
+  llvm::Type *i1 = llvm::Type::getInt1Ty(ctx_);
+  llvm::Type *ptr = PointerType::getUnqual(ctx_);
+  FunctionType *ft;
+  if (op == 0)
+    ft = FunctionType::get(voidTy, {ptr}, false);
+  else if (op == 1)
+    ft = FunctionType::get(voidTy, {ptr, ptr, ptr}, false);
+  else
+    ft = FunctionType::get(i1, {ptr, ptr, ptr}, false);
+  Function *fn =
+      Function::Create(ft, Function::InternalLinkage, mangled, module_.get());
+  mapFns_[mangled] = fn;
+  pendingMapFns_.push_back({mapType, op, fn});
+  return fn;
+}
+
+void CodeGen::genMapFnBody(const kal::Type &mapType, int op, Function *fn) {
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *i8 = llvm::Type::getInt8Ty(ctx_);
+  llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+  StructType *vt = vecLLVMTy();             // {table, len, cap}
+  StructType *slotTy = mapSlotTy(mapType);  // {occ, key, val}
+  const kal::Type &keyT = mapType.keyType();
+  const kal::Type &valT = mapType.valType();
+  uint64_t slotSize = dl_.getTypeAllocSize(slotTy).getFixedValue();
+  Value *m = fn->getArg(0);
+  auto *entry = BasicBlock::Create(ctx_, "entry", fn);
+  builder_.SetInsertPoint(entry);
+  Value *tablePtr = builder_.CreateStructGEP(vt, m, 0, "tablep");
+  Value *lenPtr = builder_.CreateStructGEP(vt, m, 1, "lenp");
+  Value *capPtr = builder_.CreateStructGEP(vt, m, 2, "capp");
+  // &table[idx].field を返すヘルパ
+  auto slotField = [&](Value *table, Value *idx, unsigned f) {
+    Value *s = builder_.CreateGEP(slotTy, table, {idx}, "slot");
+    return builder_.CreateStructGEP(slotTy, s, f, "sf");
+  };
+
+  if (op == 0) { // ---- grow(m) ----
+    Value *len = builder_.CreateLoad(i64, lenPtr, "len");
+    Value *cap = builder_.CreateLoad(i64, capPtr, "cap");
+    // (len+1)*4 > cap*3 か cap==0 なら拡張
+    Value *need = builder_.CreateMul(
+        builder_.CreateAdd(len, ConstantInt::get(i64, 1)),
+        ConstantInt::get(i64, 4));
+    Value *thresh = builder_.CreateMul(cap, ConstantInt::get(i64, 3));
+    Value *grow = builder_.CreateOr(
+        builder_.CreateICmpEQ(cap, ConstantInt::get(i64, 0)),
+        builder_.CreateICmpUGT(need, thresh), "grow");
+    auto *doBB = BasicBlock::Create(ctx_, "do", fn);
+    auto *retBB = BasicBlock::Create(ctx_, "ret", fn);
+    builder_.CreateCondBr(grow, doBB, retBB);
+    builder_.SetInsertPoint(doBB);
+    Value *isZero = builder_.CreateICmpEQ(cap, ConstantInt::get(i64, 0));
+    Value *newCap = builder_.CreateSelect(
+        isZero, ConstantInt::get(i64, 8),
+        builder_.CreateMul(cap, ConstantInt::get(i64, 2)), "newcap");
+    Value *oldTable = builder_.CreateLoad(ptrTy, tablePtr, "oldt");
+    Value *newTable = builder_.CreateCall(
+        module_->getFunction("calloc"),
+        {newCap, ConstantInt::get(i64, slotSize)}, "newt");
+    // rehash: for i in 0..cap: if occ: probe newTable, place
+    AllocaInst *iSlot = builder_.CreateAlloca(i64, nullptr, "i");
+    builder_.CreateStore(ConstantInt::get(i64, 0), iSlot);
+    auto *oc = BasicBlock::Create(ctx_, "ocond", fn);
+    auto *ob = BasicBlock::Create(ctx_, "obody", fn);
+    auto *onext = BasicBlock::Create(ctx_, "onext", fn);
+    auto *oend = BasicBlock::Create(ctx_, "oend", fn);
+    builder_.CreateBr(oc);
+    builder_.SetInsertPoint(oc);
+    Value *i = builder_.CreateLoad(i64, iSlot, "i");
+    builder_.CreateCondBr(builder_.CreateICmpULT(i, cap), ob, oend);
+    builder_.SetInsertPoint(ob);
+    Value *occ = builder_.CreateLoad(i8, slotField(oldTable, i, 0), "occ");
+    Value *isOcc = builder_.CreateICmpNE(occ, ConstantInt::get(i8, 0));
+    auto *place = BasicBlock::Create(ctx_, "place", fn);
+    builder_.CreateCondBr(isOcc, place, onext);
+    builder_.SetInsertPoint(place);
+    Value *oldKeyP = slotField(oldTable, i, 1);
+    Value *h = genKeyHash(keyT, oldKeyP);
+    AllocaInst *jSlot = builder_.CreateAlloca(i64, nullptr, "j");
+    builder_.CreateStore(builder_.CreateURem(h, newCap), jSlot);
+    auto *pc = BasicBlock::Create(ctx_, "pcond", fn);
+    builder_.CreateBr(pc);
+    builder_.SetInsertPoint(pc);
+    Value *j = builder_.CreateLoad(i64, jSlot, "j");
+    Value *nocc = builder_.CreateLoad(i8, slotField(newTable, j, 0), "nocc");
+    auto *empty = BasicBlock::Create(ctx_, "empty", fn);
+    auto *pnext = BasicBlock::Create(ctx_, "pnext", fn);
+    builder_.CreateCondBr(builder_.CreateICmpEQ(nocc, ConstantInt::get(i8, 0)),
+                          empty, pnext);
+    builder_.SetInsertPoint(empty);
+    builder_.CreateStore(ConstantInt::get(i8, 1), slotField(newTable, j, 0));
+    builder_.CreateStore(
+        builder_.CreateLoad(toLLVM(keyT), oldKeyP),
+        slotField(newTable, j, 1)); // キーは構造体ごと転送 (str はバッファ共有)
+    builder_.CreateStore(
+        builder_.CreateLoad(toLLVM(valT), slotField(oldTable, i, 2)),
+        slotField(newTable, j, 2));
+    builder_.CreateBr(onext);
+    builder_.SetInsertPoint(pnext);
+    builder_.CreateStore(
+        builder_.CreateURem(builder_.CreateAdd(j, ConstantInt::get(i64, 1)),
+                            newCap),
+        jSlot);
+    builder_.CreateBr(pc);
+    builder_.SetInsertPoint(onext);
+    builder_.CreateStore(
+        builder_.CreateAdd(i, ConstantInt::get(i64, 1)), iSlot);
+    builder_.CreateBr(oc);
+    builder_.SetInsertPoint(oend);
+    builder_.CreateCall(module_->getFunction("free"), {oldTable}); // 表のみ解放
+    builder_.CreateStore(newTable, tablePtr);
+    builder_.CreateStore(newCap, capPtr);
+    builder_.CreateBr(retBB);
+    builder_.SetInsertPoint(retBB);
+    builder_.CreateRetVoid();
+    verifyFunction(*fn);
+    return;
+  }
+
+  if (op == 1) { // ---- insert(m, keyptr, valptr) ----
+    Value *keyptr = fn->getArg(1);
+    Value *valptr = fn->getArg(2);
+    builder_.CreateCall(getMapFn(mapType, 0), {m}); // grow
+    Value *table = builder_.CreateLoad(ptrTy, tablePtr, "table");
+    Value *cap = builder_.CreateLoad(i64, capPtr, "cap");
+    Value *h = genKeyHash(keyT, keyptr);
+    AllocaInst *idxS = builder_.CreateAlloca(i64, nullptr, "idx");
+    builder_.CreateStore(builder_.CreateURem(h, cap), idxS);
+    auto *loop = BasicBlock::Create(ctx_, "loop", fn);
+    builder_.CreateBr(loop);
+    builder_.SetInsertPoint(loop);
+    Value *idx = builder_.CreateLoad(i64, idxS, "idx");
+    Value *occ = builder_.CreateLoad(i8, slotField(table, idx, 0), "occ");
+    auto *emptyBB = BasicBlock::Create(ctx_, "ins.empty", fn);
+    auto *occBB = BasicBlock::Create(ctx_, "ins.occ", fn);
+    builder_.CreateCondBr(builder_.CreateICmpEQ(occ, ConstantInt::get(i8, 0)),
+                          emptyBB, occBB);
+    // 空スロット: 新規エントリ
+    builder_.SetInsertPoint(emptyBB);
+    builder_.CreateStore(ConstantInt::get(i8, 1), slotField(table, idx, 0));
+    if (keyT.isStr()) {
+      // str キーはバイト列を所有コピーする (malloc+memcpy)
+      auto *st = cast<StructType>(toLLVM(keyT));
+      Value *kp = builder_.CreateLoad(ptrTy, builder_.CreateStructGEP(st, keyptr, 0));
+      Value *kn = builder_.CreateLoad(i64, builder_.CreateStructGEP(st, keyptr, 1));
+      Value *buf = builder_.CreateCall(module_->getFunction("malloc"), {kn}, "kbuf");
+      builder_.CreateMemCpy(buf, MaybeAlign(1), kp, MaybeAlign(1), kn);
+      Value *dstKey = slotField(table, idx, 1);
+      builder_.CreateStore(buf, builder_.CreateStructGEP(st, dstKey, 0));
+      builder_.CreateStore(kn, builder_.CreateStructGEP(st, dstKey, 1));
+    } else {
+      builder_.CreateStore(builder_.CreateLoad(toLLVM(keyT), keyptr),
+                           slotField(table, idx, 1));
+    }
+    builder_.CreateStore(builder_.CreateLoad(toLLVM(valT), valptr),
+                         slotField(table, idx, 2));
+    builder_.CreateStore(
+        builder_.CreateAdd(builder_.CreateLoad(i64, lenPtr),
+                           ConstantInt::get(i64, 1)),
+        lenPtr); // len++
+    builder_.CreateRetVoid();
+    // 占有スロット: キー一致なら値を上書き、違えば次へ
+    builder_.SetInsertPoint(occBB);
+    Value *eq = genKeyEq(keyT, slotField(table, idx, 1), keyptr);
+    auto *over = BasicBlock::Create(ctx_, "ins.over", fn);
+    auto *nextBB = BasicBlock::Create(ctx_, "ins.next", fn);
+    builder_.CreateCondBr(eq, over, nextBB);
+    builder_.SetInsertPoint(over);
+    builder_.CreateStore(builder_.CreateLoad(toLLVM(valT), valptr),
+                         slotField(table, idx, 2));
+    builder_.CreateRetVoid();
+    builder_.SetInsertPoint(nextBB);
+    builder_.CreateStore(
+        builder_.CreateURem(builder_.CreateAdd(idx, ConstantInt::get(i64, 1)),
+                            cap),
+        idxS);
+    builder_.CreateBr(loop);
+    verifyFunction(*fn);
+    return;
+  }
+
+  // ---- get(m, keyptr, valout) -> i1 ----
+  Value *keyptr = fn->getArg(1);
+  Value *valout = fn->getArg(2);
+  Value *cap = builder_.CreateLoad(i64, capPtr, "cap");
+  auto *go = BasicBlock::Create(ctx_, "go", fn);
+  auto *noBB = BasicBlock::Create(ctx_, "notfound", fn);
+  builder_.CreateCondBr(builder_.CreateICmpEQ(cap, ConstantInt::get(i64, 0)),
+                        noBB, go);
+  builder_.SetInsertPoint(go);
+  Value *table = builder_.CreateLoad(ptrTy, tablePtr, "table");
+  Value *h = genKeyHash(keyT, keyptr);
+  AllocaInst *idxS = builder_.CreateAlloca(i64, nullptr, "idx");
+  builder_.CreateStore(builder_.CreateURem(h, cap), idxS);
+  auto *loop = BasicBlock::Create(ctx_, "loop", fn);
+  builder_.CreateBr(loop);
+  builder_.SetInsertPoint(loop);
+  Value *idx = builder_.CreateLoad(i64, idxS, "idx");
+  Value *occ = builder_.CreateLoad(i8, slotField(table, idx, 0), "occ");
+  auto *occBB = BasicBlock::Create(ctx_, "g.occ", fn);
+  builder_.CreateCondBr(builder_.CreateICmpEQ(occ, ConstantInt::get(i8, 0)),
+                        noBB, occBB); // 空に当たれば不在
+  builder_.SetInsertPoint(occBB);
+  Value *eq = genKeyEq(keyT, slotField(table, idx, 1), keyptr);
+  auto *foundBB = BasicBlock::Create(ctx_, "found", fn);
+  auto *nextBB = BasicBlock::Create(ctx_, "g.next", fn);
+  builder_.CreateCondBr(eq, foundBB, nextBB);
+  builder_.SetInsertPoint(foundBB);
+  builder_.CreateStore(builder_.CreateLoad(toLLVM(valT), slotField(table, idx, 2)),
+                       valout);
+  builder_.CreateRet(builder_.getInt1(true));
+  builder_.SetInsertPoint(nextBB);
+  builder_.CreateStore(
+      builder_.CreateURem(builder_.CreateAdd(idx, ConstantInt::get(i64, 1)), cap),
+      idxS);
+  builder_.CreateBr(loop);
+  builder_.SetInsertPoint(noBB);
+  builder_.CreateRet(builder_.getInt1(false));
+  verifyFunction(*fn);
+}
+
+// 組み込み hashmap(): 空の HashMap { null, 0, 0 }。
+Value *CodeGen::genMapNew(const CallExpr *e) {
+  (void)e;
+  StructType *vt = vecLLVMTy();
+  Constant *z = ConstantInt::get(llvm::Type::getInt64Ty(ctx_), 0);
+  return ConstantStruct::get(
+      vt, {ConstantPointerNull::get(PointerType::getUnqual(ctx_)), z, z});
+}
+
+// 組み込み insert(m, k, v): m は可変な場所。キー/値を退避してヘルパへ渡す。
+Value *CodeGen::genInsert(const CallExpr *e) {
+  Value *mapPtr = genAddr(e->args[0].get());
+  if (blockDone())
+    return nullptr;
+  kal::Type mapT = typeSubst_.empty() ? e->args[0]->type
+                                      : substType(e->args[0]->type, typeSubst_);
+  Value *kv = genExpr(e->args[1].get());
+  Value *vv = genExpr(e->args[2].get());
+  if (blockDone())
+    return nullptr;
+  // キーが String なら str ビュー {ptr,len} に縮める (キー型は str)
+  if (mapT.keyType().isStr() && e->args[1]->type.isString()) {
+    Value *p = builder_.CreateExtractValue(kv, {0});
+    Value *n = builder_.CreateExtractValue(kv, {1});
+    auto *st = cast<StructType>(toLLVM(kal::Type::strTy()));
+    Value *agg = UndefValue::get(st);
+    agg = builder_.CreateInsertValue(agg, p, {0});
+    agg = builder_.CreateInsertValue(agg, n, {1});
+    kv = agg;
+  }
+  AllocaInst *kSlot = entryAlloca(toLLVM(mapT.keyType()), "k");
+  builder_.CreateStore(kv, kSlot);
+  AllocaInst *vSlot = entryAlloca(toLLVM(mapT.valType()), "v");
+  builder_.CreateStore(vv, vSlot);
+  builder_.CreateCall(getMapFn(mapT, 1), {mapPtr, kSlot, vSlot});
+  // String キー引数の一時値があれば解放 (str ビューを取った後)
+  dropDiscardedValue(e->args[1].get(), kv);
+  return nullptr;
+}
+
+Value *CodeGen::genContains(const CallExpr *e) {
+  kal::Type mapT = typeSubst_.empty() ? e->args[0]->type
+                                      : substType(e->args[0]->type, typeSubst_);
+  // map のアドレス (場所ならそのまま、一時値なら退避)
+  bool mapIsPlace = isPlaceExpr(e->args[0].get());
+  Value *mapVal = nullptr, *mapPtr = nullptr;
+  if (mapIsPlace) {
+    mapPtr = genAddr(e->args[0].get());
+  } else {
+    mapVal = genExpr(e->args[0].get());
+    mapPtr = entryAlloca(vecLLVMTy(), "maptmp");
+    builder_.CreateStore(mapVal, mapPtr);
+  }
+  Value *kv = genExpr(e->args[1].get());
+  if (blockDone())
+    return nullptr;
+  if (mapT.keyType().isStr() && e->args[1]->type.isString()) {
+    Value *p = builder_.CreateExtractValue(kv, {0});
+    Value *n = builder_.CreateExtractValue(kv, {1});
+    auto *st = cast<StructType>(toLLVM(kal::Type::strTy()));
+    Value *agg = UndefValue::get(st);
+    agg = builder_.CreateInsertValue(agg, p, {0});
+    agg = builder_.CreateInsertValue(agg, n, {1});
+    kv = agg;
+  }
+  AllocaInst *kSlot = entryAlloca(toLLVM(mapT.keyType()), "k");
+  builder_.CreateStore(kv, kSlot);
+  AllocaInst *vSlot = entryAlloca(toLLVM(mapT.valType()), "vo");
+  Value *found = builder_.CreateCall(getMapFn(mapT, 2), {mapPtr, kSlot, vSlot},
+                                     "found");
+  dropDiscardedValue(e->args[1].get(), kv);
+  if (!mapIsPlace)
+    dropDiscardedValue(e->args[0].get(), mapVal); // 一時 map を解放
+  return found;
+}
+
+Value *CodeGen::genMapGet(const CallExpr *e) {
+  kal::Type mapT = typeSubst_.empty() ? e->args[0]->type
+                                      : substType(e->args[0]->type, typeSubst_);
+  kal::Type resT = typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
+  bool mapIsPlace = isPlaceExpr(e->args[0].get());
+  Value *mapVal = nullptr, *mapPtr = nullptr;
+  if (mapIsPlace) {
+    mapPtr = genAddr(e->args[0].get());
+  } else {
+    mapVal = genExpr(e->args[0].get());
+    mapPtr = entryAlloca(vecLLVMTy(), "maptmp");
+    builder_.CreateStore(mapVal, mapPtr);
+  }
+  Value *kv = genExpr(e->args[1].get());
+  if (blockDone())
+    return nullptr;
+  if (mapT.keyType().isStr() && e->args[1]->type.isString()) {
+    Value *p = builder_.CreateExtractValue(kv, {0});
+    Value *n = builder_.CreateExtractValue(kv, {1});
+    auto *st = cast<StructType>(toLLVM(kal::Type::strTy()));
+    Value *agg = UndefValue::get(st);
+    agg = builder_.CreateInsertValue(agg, p, {0});
+    agg = builder_.CreateInsertValue(agg, n, {1});
+    kv = agg;
+  }
+  AllocaInst *kSlot = entryAlloca(toLLVM(mapT.keyType()), "k");
+  builder_.CreateStore(kv, kSlot);
+  AllocaInst *vSlot = entryAlloca(toLLVM(mapT.valType()), "vo");
+  Value *found = builder_.CreateCall(getMapFn(mapT, 2), {mapPtr, kSlot, vSlot},
+                                     "found");
+  dropDiscardedValue(e->args[1].get(), kv);
+  if (!mapIsPlace)
+    dropDiscardedValue(e->args[0].get(), mapVal);
+  // Option<V> を組み立てる: found なら Some(*vSlot)、else None
+  Value *v = builder_.CreateLoad(toLLVM(mapT.valType()), vSlot, "gv");
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  auto *someBB = BasicBlock::Create(ctx_, "get.some", fn);
+  auto *noneBB = BasicBlock::Create(ctx_, "get.none", fn);
+  auto *contBB = BasicBlock::Create(ctx_, "get.cont", fn);
+  builder_.CreateCondBr(found, someBB, noneBB);
+  builder_.SetInsertPoint(someBB);
+  Value *some = genVariant(resT, 0, {v});
+  Value *someEnd = builder_.GetInsertBlock();
+  builder_.CreateBr(contBB);
+  builder_.SetInsertPoint(noneBB);
+  Value *none = genVariant(resT, 1, {});
+  Value *noneEnd = builder_.GetInsertBlock();
+  builder_.CreateBr(contBB);
+  builder_.SetInsertPoint(contBB);
+  PHINode *phi = builder_.CreatePHI(none->getType(), 2, "getopt");
+  phi->addIncoming(some, cast<BasicBlock>(someEnd));
+  phi->addIncoming(none, cast<BasicBlock>(noneEnd));
+  return phi;
 }
 
 // 組み込み pop(v): 末尾要素を取り出して Option<T> で返す。
@@ -1845,6 +2315,9 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
   ensure("free", voidTy, {PointerType::getUnqual(ctx_)}); // Drop のヒープ解放
   ensure("realloc", PointerType::getUnqual(ctx_),
          {PointerType::getUnqual(ctx_), i64}); // Vec の成長
+  ensure("calloc", PointerType::getUnqual(ctx_), {i64, i64}); // HashMap の表 (0埋め)
+  ensure("kal_hash", i64,
+         {PointerType::getUnqual(ctx_), i64}); // str キーのハッシュ
   ensure("kal_prints", voidTy,
          {PointerType::getUnqual(ctx_), i64}); // str の出力
   ensure("memcmp", llvm::Type::getInt32Ty(ctx_),
@@ -1905,8 +2378,15 @@ std::unique_ptr<Module> CodeGen::run(const Program &program, bool emitRuntime) {
     genFunctionInto(*inst.def, fn, inst.subst, retType);
   }
 
-  // (5) ドロップグルー関数の本体を生成 (再帰型に対応してキューが空になるまで)。
+  // (5) HashMap 操作ヘルパの本体を生成 (insert→grow など連鎖するので空まで)。
   typeSubst_.clear();
+  while (!pendingMapFns_.empty()) {
+    auto mf = std::move(pendingMapFns_.back());
+    pendingMapFns_.pop_back();
+    genMapFnBody(std::get<0>(mf), std::get<1>(mf), std::get<2>(mf));
+  }
+
+  // (6) ドロップグルー関数の本体を生成 (再帰型に対応してキューが空になるまで)。
   while (!pendingDropFns_.empty()) {
     auto pd = std::move(pendingDropFns_.back());
     pendingDropFns_.pop_back();
@@ -2003,6 +2483,35 @@ void CodeGen::emitRuntimeDefs() {
     builder_.CreateBr(cond);
     builder_.SetInsertPoint(end);
     builder_.CreateRetVoid();
+    verifyFunction(*fn);
+  }
+  // kal_hash(ptr s, i64 n) -> i64: FNV-1a 64bit
+  {
+    llvm::Type *i8 = llvm::Type::getInt8Ty(ctx_);
+    Function *fn = body("kal_hash");
+    Value *s = fn->getArg(0);
+    Value *n = fn->getArg(1);
+    AllocaInst *hSlot = builder_.CreateAlloca(i64, nullptr, "h");
+    AllocaInst *iSlot = builder_.CreateAlloca(i64, nullptr, "i");
+    builder_.CreateStore(builder_.getInt64(1469598103934665603ULL), hSlot);
+    builder_.CreateStore(builder_.getInt64(0), iSlot);
+    BasicBlock *cond = BasicBlock::Create(ctx_, "cond", fn);
+    BasicBlock *bodyBB = BasicBlock::Create(ctx_, "body", fn);
+    BasicBlock *end = BasicBlock::Create(ctx_, "end", fn);
+    builder_.CreateBr(cond);
+    builder_.SetInsertPoint(cond);
+    Value *i = builder_.CreateLoad(i64, iSlot, "i");
+    builder_.CreateCondBr(builder_.CreateICmpULT(i, n), bodyBB, end);
+    builder_.SetInsertPoint(bodyBB);
+    Value *b = builder_.CreateLoad(i8, builder_.CreateGEP(i8, s, {i}), "b");
+    Value *h = builder_.CreateLoad(i64, hSlot, "h");
+    h = builder_.CreateXor(h, builder_.CreateZExt(b, i64));
+    h = builder_.CreateMul(h, builder_.getInt64(1099511628211ULL));
+    builder_.CreateStore(h, hSlot);
+    builder_.CreateStore(builder_.CreateAdd(i, builder_.getInt64(1)), iSlot);
+    builder_.CreateBr(cond);
+    builder_.SetInsertPoint(end);
+    builder_.CreateRet(builder_.CreateLoad(i64, hSlot, "h"));
     verifyFunction(*fn);
   }
   // kal_panic(): メッセージを表示して exit(1)

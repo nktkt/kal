@@ -52,6 +52,8 @@ std::string Type::str() const {
     return "str";
   case Kind::String:
     return "String";
+  case Kind::Map:
+    return "HashMap<" + elems[0].str() + ", " + elems[1].str() + ">";
   }
   return "<?>";
 }

@@ -144,6 +144,12 @@ void MoveCheck::use(const Expr *e) {
       requireLive(c->args[0].get()); // pop/clear(v): v は可変借用 (ムーブしない)
       return;
     }
+    // HashMap 操作: map は借用、キー (int/bool/str) と値 (Copy) もムーブしない。
+    if (c->isInsertBuiltin || c->isMapGetBuiltin || c->isContainsBuiltin) {
+      for (auto &a : c->args)
+        requireLive(a.get());
+      return;
+    }
     for (size_t i = 0; i < c->args.size(); ++i) {
       // String→str に強制変換される引数は借用 (ムーブしない)。それ以外は消費。
       if (i < c->argCoercedToStr.size() && c->argCoercedToStr[i])

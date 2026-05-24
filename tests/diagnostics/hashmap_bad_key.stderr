@@ -1,0 +1,6 @@
+error[E0282]: HashMap のキーにできるのは整数・bool・str です (実際 P)
+ --> tests/diagnostics/hashmap_bad_key.kal:3:28
+  |
+3 | { let m: HashMap<P, i64> = hashmap(); printi(len(m)); };
+  |                            ^^^^^^^^^
+1 個のエラーで中断しました

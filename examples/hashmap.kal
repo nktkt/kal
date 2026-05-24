@@ -1,0 +1,43 @@
+# HashMap<K, V>: ハッシュマップ (連想配列)。
+#   hashmap()         空の HashMap<K,V> を作る (型は注釈から)
+#   insert(m, k, v)   k→v を挿入 (既存キーなら上書き)。m は可変借用
+#   get(m, k)         Option<V> を返す (なければ None)
+#   contains(m, k)    bool
+#   len(m)            要素数
+# キー K は 整数・bool・str。値 V は Copy 型 (数値・bool・str など)。
+# str キーは内部で所有コピーされ、スコープを抜けると自動解放される (Drop)。
+
+fn uw(o: Option<i64>) -> i64 = match o { Some(x) => x, None => -1 };
+
+# 文字列キーで単語の数を数える。
+{
+  let mut counts: HashMap<str, i64> = hashmap();
+  insert(counts, "apple", 1);
+  insert(counts, "banana", 2);
+  insert(counts, "apple", 3);          # 上書き
+  printi(len(counts));                 # => 2
+  printi(uw(get(counts, "apple")));    # => 3
+  printi(uw(get(counts, "banana")));   # => 2
+  printi(uw(get(counts, "cherry")));   # => -1   (存在しない)
+  printi(if contains(counts, "apple") then 1 else 0);  # => 1
+  printi(if contains(counts, "kiwi")  then 1 else 0);  # => 0
+};
+
+# 整数キー。多数挿入して自動拡張 (rehash) を確認。
+{
+  let mut sq: HashMap<i64, i64> = hashmap();
+  for i = 0, i < 50, 1 in insert(sq, i as i64, (i * i) as i64);
+  printi(len(sq));                     # => 50
+  printi(uw(get(sq, 7)));              # => 49
+  printi(uw(get(sq, 49)));             # => 2401
+};
+
+# str キーで str 値を引く (簡易辞書)。
+fn tr(o: Option<str>) -> str = match o { Some(s) => s, None => "(none)" };
+{
+  let mut dict: HashMap<str, str> = hashmap();
+  insert(dict, "cat", "neko");
+  insert(dict, "dog", "inu");
+  prints(tr(get(dict, "cat"))); prints("\n");   # => neko
+  prints(tr(get(dict, "dog"))); prints("\n");   # => inu
+};

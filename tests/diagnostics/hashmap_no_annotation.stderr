@@ -1,0 +1,6 @@
+error[E0281]: hashmap の型を推論できません (`let m: HashMap<K,V> = hashmap();` のように型注釈を付けてください)
+ --> tests/diagnostics/hashmap_no_annotation.kal:2:27
+  |
+2 | fn f() -> i64 = { let m = hashmap(); 0 };
+  |                           ^^^^^^^^^
+1 個のエラーで中断しました

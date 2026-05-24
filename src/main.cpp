@@ -55,6 +55,14 @@ extern "C" void putchard(int64_t x) { std::putchar(static_cast<int>(x)); }
 extern "C" void kal_prints(const char *s, int64_t n) {
   std::fwrite(s, 1, static_cast<size_t>(n), stdout);
 }
+extern "C" int64_t kal_hash(const char *s, int64_t n) {
+  uint64_t h = 1469598103934665603ULL; // FNV-1a 64bit offset basis
+  for (int64_t i = 0; i < n; i++) {
+    h ^= static_cast<unsigned char>(s[i]);
+    h *= 1099511628211ULL; // FNV prime
+  }
+  return static_cast<int64_t>(h);
+}
 extern "C" void kal_panic() {
   std::printf("panic: index out of bounds\n");
   std::exit(1);
@@ -332,6 +340,8 @@ int main(int argc, char **argv) {
       orc::ExecutorAddr::fromPtr(&kal_panic), JITSymbolFlags::Exported};
   syms[jit->mangleAndIntern("kal_prints")] = {
       orc::ExecutorAddr::fromPtr(&kal_prints), JITSymbolFlags::Exported};
+  syms[jit->mangleAndIntern("kal_hash")] = {
+      orc::ExecutorAddr::fromPtr(&kal_hash), JITSymbolFlags::Exported};
   if (auto err = jit->getMainJITDylib().define(orc::absoluteSymbols(syms))) {
     errs() << "シンボル登録に失敗: " << toString(std::move(err)) << "\n";
     return 1;
