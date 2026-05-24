@@ -1,0 +1,6 @@
+error[E0267]: pop の引数は可変な場所である必要があります (`let mut v` で宣言してください)
+ --> tests/diagnostics/pop_immutable.kal:3:46
+  |
+3 | { let v: Vec<i64> = vec(); printi(unwrap(pop(v))); };
+  |                                              ^
+1 個のエラーで中断しました

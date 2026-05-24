@@ -1,0 +1,2 @@
+# pop's argument must be a Vec.
+{ let mut x: i64 = 5; pop(x); };

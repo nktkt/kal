@@ -152,8 +152,9 @@ The single-pass design cannot scale to a real language. Rebuild the skeleton.
   (`prints`/`len`/`s[i]`).
   ✅ Owned `String` landed — heap `{ptr,len,cap}` (`string`/`push_str`), Drop-freed.
   ✅ String comparison (`== != < <= > >=`, lexicographic via `memcmp`) landed.
+  ✅ `Vec` `pop` (→ `Option<T>`) and `clear` landed.
   Next: `+` concatenation / `String`→`str` coercion, then `HashMap`.
-  (Remaining: `Vec::pop`/iteration, dropping discarded owned temporaries.)
+  (Remaining: iteration, dropping discarded owned temporaries.)
 - `Option<T>` / `Result<T,E>` and the `?` operator — ✅ done (prelude types +
   early `return` and `?`). (Heap-backed collections still pending.)
 - Iterators and closures.

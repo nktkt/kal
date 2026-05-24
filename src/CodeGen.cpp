@@ -881,6 +881,10 @@ Value *CodeGen::genCall(const CallExpr *e) {
     return genVecNew(e);
   if (e->isPushBuiltin)
     return genPush(e);
+  if (e->isPopBuiltin)
+    return genPop(e); // pop(v): v を場所として扱う
+  if (e->isClearBuiltin)
+    return genClear(e); // clear(v): v を場所として扱う
   if (e->isPushStrBuiltin)
     return genPushStr(e); // push_str(s, t): s を場所として扱う
   std::vector<Value *> args;
@@ -1340,6 +1344,97 @@ Value *CodeGen::genPushStr(const CallExpr *e) {
   builder_.CreateMemCpy(dst, MaybeAlign(1), tData, MaybeAlign(1), tLen);
   builder_.CreateStore(need, lenPtr);
   return nullptr; // unit
+}
+
+// 組み込み pop(v): 末尾要素を取り出して Option<T> で返す。
+// 空なら None。非空なら len を 1 減らし (= 要素の所有権を呼び出し側へ移す。
+// len 外になるので Vec の Drop はその要素に触れない)、Some(elem) を返す。
+Value *CodeGen::genPop(const CallExpr *e) {
+  Value *vecPtr = genAddr(e->args[0].get()); // Vec{ptr,len,cap} の場所
+  if (blockDone())
+    return nullptr;
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+  StructType *vt = vecLLVMTy();
+  // 結果型 Option<T> (単態化中なら具体化済み)、要素型 T はその型引数。
+  kal::Type resT =
+      typeSubst_.empty() ? e->type : substType(e->type, typeSubst_);
+  llvm::Type *elemTy = toLLVM(resT.elems[0]);
+
+  Value *lenPtr = builder_.CreateStructGEP(vt, vecPtr, 1, "lenptr");
+  Value *len = builder_.CreateLoad(i64, lenPtr, "len");
+
+  Function *fn = builder_.GetInsertBlock()->getParent();
+  BasicBlock *emptyBB = BasicBlock::Create(ctx_, "pop.empty", fn);
+  BasicBlock *someBB = BasicBlock::Create(ctx_, "pop.some", fn);
+  BasicBlock *contBB = BasicBlock::Create(ctx_, "pop.cont", fn);
+  Value *isEmpty =
+      builder_.CreateICmpEQ(len, ConstantInt::get(i64, 0), "empty");
+  builder_.CreateCondBr(isEmpty, emptyBB, someBB);
+
+  // 空: None
+  builder_.SetInsertPoint(emptyBB);
+  Value *none = genVariant(resT, 1, {});
+  BasicBlock *emptyEnd = builder_.GetInsertBlock();
+  builder_.CreateBr(contBB);
+
+  // 非空: len-1 にして data[len-1] を読み、Some(elem)
+  builder_.SetInsertPoint(someBB);
+  Value *newlen = builder_.CreateSub(len, ConstantInt::get(i64, 1), "newlen");
+  builder_.CreateStore(newlen, lenPtr);
+  Value *data = builder_.CreateLoad(
+      ptrTy, builder_.CreateStructGEP(vt, vecPtr, 0, "dataptr"), "data");
+  Value *ep = builder_.CreateGEP(elemTy, data, {newlen}, "elemptr");
+  Value *elem = builder_.CreateLoad(elemTy, ep, "popped");
+  Value *some = genVariant(resT, 0, {elem});
+  BasicBlock *someEnd = builder_.GetInsertBlock();
+  builder_.CreateBr(contBB);
+
+  builder_.SetInsertPoint(contBB);
+  PHINode *phi = builder_.CreatePHI(none->getType(), 2, "popopt");
+  phi->addIncoming(none, emptyEnd);
+  phi->addIncoming(some, someEnd);
+  return phi;
+}
+
+// 組み込み clear(v): 生存要素を drop してから長さを 0 にする (容量は保持)。
+Value *CodeGen::genClear(const CallExpr *e) {
+  Value *vecPtr = genAddr(e->args[0].get());
+  if (blockDone())
+    return nullptr;
+  llvm::Type *i64 = llvm::Type::getInt64Ty(ctx_);
+  llvm::Type *ptrTy = PointerType::getUnqual(ctx_);
+  StructType *vt = vecLLVMTy();
+  kal::Type vecT =
+      typeSubst_.empty() ? e->args[0]->type
+                         : substType(e->args[0]->type, typeSubst_);
+  kal::Type elemT = vecT.elemType();
+
+  Value *lenPtr = builder_.CreateStructGEP(vt, vecPtr, 1, "lenptr");
+  if (needsDrop(elemT)) {
+    Value *len = builder_.CreateLoad(i64, lenPtr, "len");
+    Value *data = builder_.CreateLoad(
+        ptrTy, builder_.CreateStructGEP(vt, vecPtr, 0, "dataptr"), "data");
+    llvm::Type *elemTy = toLLVM(elemT);
+    Function *fn = builder_.GetInsertBlock()->getParent();
+    AllocaInst *iSlot = builder_.CreateAlloca(i64, nullptr, "i");
+    builder_.CreateStore(ConstantInt::get(i64, 0), iSlot);
+    BasicBlock *cond = BasicBlock::Create(ctx_, "clr.cond", fn);
+    BasicBlock *body = BasicBlock::Create(ctx_, "clr.body", fn);
+    BasicBlock *end = BasicBlock::Create(ctx_, "clr.end", fn);
+    builder_.CreateBr(cond);
+    builder_.SetInsertPoint(cond);
+    Value *i = builder_.CreateLoad(i64, iSlot, "i");
+    builder_.CreateCondBr(builder_.CreateICmpULT(i, len, "more"), body, end);
+    builder_.SetInsertPoint(body);
+    Value *ep = builder_.CreateGEP(elemTy, data, {i}, "elemptr");
+    builder_.CreateCall(getDropFn(elemT), {ep});
+    builder_.CreateStore(builder_.CreateAdd(i, ConstantInt::get(i64, 1)), iSlot);
+    builder_.CreateBr(cond);
+    builder_.SetInsertPoint(end);
+  }
+  builder_.CreateStore(ConstantInt::get(i64, 0), lenPtr); // 長さ 0 (容量は保持)
+  return nullptr;                                          // unit
 }
 
 Value *CodeGen::genCast(const CastExpr *e) {

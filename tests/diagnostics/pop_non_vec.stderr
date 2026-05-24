@@ -1,0 +1,6 @@
+error[E0266]: pop の引数は Vec である必要があります (実際 i64)
+ --> tests/diagnostics/pop_non_vec.kal:2:27
+  |
+2 | { let mut x: i64 = 5; pop(x); };
+  |                           ^
+1 個のエラーで中断しました

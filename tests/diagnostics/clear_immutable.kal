@@ -1,0 +1,2 @@
+# clear needs a mutable Vec.
+{ let v: Vec<i64> = vec(); clear(v); };

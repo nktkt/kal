@@ -285,6 +285,10 @@ struct CallExpr : Expr {
   bool isStringBuiltin = false;
   // Sema が、これが組み込み push_str(s, t) なら設定する (String に str を追記)
   bool isPushStrBuiltin = false;
+  // Sema が、これが組み込み pop(v) なら設定する (末尾要素を Option<T> で取り出す)
+  bool isPopBuiltin = false;
+  // Sema が、これが組み込み clear(v) なら設定する (全要素を drop して空にする)
+  bool isClearBuiltin = false;
   // Sema が、これがジェネリック関数呼び出しなら推論した型引数を設定する
   std::vector<Type> typeArgs;
   CallExpr(Span s, std::string callee, Span calleeSpan,

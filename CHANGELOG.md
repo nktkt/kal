@@ -5,6 +5,14 @@ Pre-1.0 releases are unstable: syntax and semantics may change between versions.
 
 ## [Unreleased]
 
+- **`Vec` removal: `pop` and `clear`.** `pop(v) -> Option<T>` removes and returns
+  the last element (`None` when empty); it shrinks the length first, so ownership
+  moves to the caller and the `Vec` won't also drop that element — this is the
+  sound way to move a non-`Copy` element out of a `Vec` (indexing still can't).
+  `clear(v)` drops every element and resets the length to 0, keeping the capacity.
+  Both require a mutable `Vec` and borrow it. Verified leak-free and double-free
+  free (incl. `Vec<Box<_>>` / `Vec<String>`), JIT and AOT agree. Diagnostics
+  `E0265`–`E0269`.
 - **String comparison:** `str` and `String` now compare with `== != < <= > >=`
   by byte (lexicographic) order, via libc `memcmp` (equal prefix → shorter sorts
   first; empty string is smallest). The two types mix freely (`s == "hi"`), both

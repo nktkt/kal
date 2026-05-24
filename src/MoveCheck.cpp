@@ -138,6 +138,10 @@ void MoveCheck::use(const Expr *e) {
       requireLive(c->args[1].get()); // t は str (Copy) ＝ 借用
       return;
     }
+    if ((c->isPopBuiltin || c->isClearBuiltin) && c->args.size() == 1) {
+      requireLive(c->args[0].get()); // pop/clear(v): v は可変借用 (ムーブしない)
+      return;
+    }
     for (auto &a : c->args)
       use(a.get());
     return;

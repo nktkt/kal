@@ -1,0 +1,6 @@
+error[E0267]: clear の引数は可変な場所である必要があります (`let mut v` で宣言してください)
+ --> tests/diagnostics/clear_immutable.kal:2:34
+  |
+2 | { let v: Vec<i64> = vec(); clear(v); };
+  |                                  ^
+1 個のエラーで中断しました

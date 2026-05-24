@@ -1,0 +1,3 @@
+# pop needs a mutable Vec (it removes an element).
+fn unwrap(o: Option<i64>) -> i64 = match o { Some(x) => x, None => -1 };
+{ let v: Vec<i64> = vec(); printi(unwrap(pop(v))); };

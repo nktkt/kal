@@ -416,8 +416,14 @@ v[1];              # => 99
 ```
 
 `push(v, x)` requires `v` to be a mutable place (`let mut`) and **moves** `x` in.
-Like a slice, you cannot move a non-`Copy` element out by indexing (`let b = v[0]`
-on a `Vec<Box<_>>` is rejected) — read `Copy` elements or borrow instead.
+`pop(v)` removes the last element and returns it as `Option<T>` (`None` if empty);
+`clear(v)` drops every element and resets the length to 0 (keeping the capacity).
+Both need a mutable `Vec`.
+
+Indexing can't move a non-`Copy` element out (`let b = v[0]` on a `Vec<Box<_>>`
+is rejected, like a slice) — read `Copy` elements, borrow, or use `pop` (which
+*is* the way to move an element out: it shrinks the length so the `Vec` won't also
+drop that element).
 
 > **Note:** an owned heap value (`Box`/`Vec`) that is produced but never bound to
 > a name (a discarded *temporary*) is not yet freed — bind it to a `let` to have
@@ -479,6 +485,8 @@ and the comparison operators (which accept both).
 - `box(x: T) -> Box<T>` — move `x` onto the heap
 - `vec() -> Vec<T>` — a new empty growable array (element type from context)
 - `push(v: Vec<T>, x: T)` — append `x` to a mutable `Vec` (grows as needed)
+- `pop(v: Vec<T>) -> Option<T>` — remove and return the last element (`None` if empty)
+- `clear(v: Vec<T>)` — drop all elements, set length to 0 (keeps capacity)
 - `string(s: str) -> String` — copy a `str` into an owned heap `String`
 - `push_str(s: String, t: str)` — append a `str` to a mutable `String`
 

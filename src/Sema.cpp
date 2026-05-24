@@ -883,6 +883,56 @@ Type Sema::checkCall(CallExpr *e, std::optional<Type> expected) {
     return Type::unit();
   }
 
+  // 組み込み pop(v: Vec<T>) -> Option<T> (末尾要素をムーブで取り出す。空なら None)
+  if (e->callee == "pop" && !funcs_.count("pop")) {
+    e->isPopBuiltin = true;
+    if (e->args.size() != 1) {
+      diag_.error(e->span, "E0265",
+                  "pop には引数が 1 つ必要です (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unknown();
+    }
+    Type vt = check(e->args[0].get(), std::nullopt);
+    if (vt.isKnown() && !vt.isVec()) {
+      diag_.error(e->args[0]->span, "E0266",
+                  "pop の引数は Vec である必要があります (実際 " + vt.str() +
+                      ")");
+      return Type::unknown();
+    }
+    if (vt.isVec() && !isMutablePlace(e->args[0].get()))
+      diag_.error(e->args[0]->span, "E0267",
+                  "pop の引数は可変な場所である必要があります "
+                  "(`let mut v` で宣言してください)");
+    if (!vt.isVec())
+      return Type::unknown();
+    return Type::enumTy("Option", {vt.elemType()});
+  }
+
+  // 組み込み clear(v: Vec<T>) -> () (全要素を drop して長さ 0 に。容量は保持)
+  if (e->callee == "clear" && !funcs_.count("clear")) {
+    e->isClearBuiltin = true;
+    if (e->args.size() != 1) {
+      diag_.error(e->span, "E0268",
+                  "clear には引数が 1 つ必要です (実際 " +
+                      std::to_string(e->args.size()) + ")");
+      for (auto &a : e->args)
+        check(a.get(), std::nullopt);
+      return Type::unit();
+    }
+    Type vt = check(e->args[0].get(), std::nullopt);
+    if (vt.isKnown() && !vt.isVec())
+      diag_.error(e->args[0]->span, "E0269",
+                  "clear の引数は Vec である必要があります (実際 " + vt.str() +
+                      ")");
+    else if (vt.isVec() && !isMutablePlace(e->args[0].get()))
+      diag_.error(e->args[0]->span, "E0267",
+                  "clear の引数は可変な場所である必要があります "
+                  "(`let mut v` で宣言してください)");
+    return Type::unit();
+  }
+
   // 組み込み box(e) -> Box<T> (ユーザーが box を定義していなければ)
   if (e->callee == "box" && !funcs_.count("box")) {
     e->isBoxBuiltin = true;

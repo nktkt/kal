@@ -1,0 +1,39 @@
+# Vec の要素を取り除く操作: pop と clear。
+#   pop(v)    末尾要素を Option<T> で取り出す (空なら None)。長さが 1 減る。
+#             これが Vec から非 Copy 要素をムーブで取り出す正規の方法。
+#             (添字 v[i] は非 Copy 要素をムーブ取り出しできない — 二重解放防止)
+#   clear(v)  全要素を drop して長さ 0 にする (確保済みの容量は保持)。
+# pop / clear はどちらも可変な Vec (`let mut`) を要求する。
+
+fn unwrap(o: Option<i64>) -> i64 = match o { Some(x) => x, None => -1 };
+
+# pop をスタックとして使う (LIFO)。
+{
+  let mut v: Vec<i64> = vec();
+  push(v, 10); push(v, 20); push(v, 30);
+  printi(unwrap(pop(v)));   # => 30
+  printi(unwrap(pop(v)));   # => 20
+  printi(len(v));           # => 1
+  printi(unwrap(pop(v)));   # => 10
+  printi(unwrap(pop(v)));   # => -1   (空なので None)
+};
+
+# pop で取り出した所有要素は呼び出し側のもの (Vec はもう触れない)。
+# 残った要素は Vec の Drop でまとめて解放されるので、二重解放もリークもない。
+fn unbox(o: Option<Box<i64>>) -> i64 = match o { Some(b) => *b, None => -1 };
+{
+  let mut bs: Vec<Box<i64>> = vec();
+  push(bs, box(7)); push(bs, box(8)); push(bs, box(9));
+  printi(unbox(pop(bs)));   # => 9    (この Box は呼び出し側で解放)
+  printi(len(bs));          # => 2    (残り 2 つは Vec の Drop で解放)
+};
+
+# clear: 全要素を drop して空にし、バッファは再利用する。
+{
+  let mut w: Vec<i64> = vec();
+  push(w, 1); push(w, 2); push(w, 3);
+  clear(w);
+  printi(len(w));           # => 0
+  push(w, 99);              # 容量は残っているので再利用できる
+  printi(w[0]);             # => 99
+};
